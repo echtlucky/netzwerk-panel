@@ -12,6 +12,9 @@
 $script:Cache = @{}
 $script:Cred  = $null
 $script:Demo  = $false
+# Lokal-Modus: keine Zugangsdaten hinterlegt. Das Panel laeuft trotzdem und
+# zeigt alles, was der eigene Rechner ohne die Box messen kann.
+$script:Lokal = $false
 
 function Get-Quellen {
     @{
@@ -53,10 +56,15 @@ function Hole {
     }
 
     $wert = $null
-    try {
-        if ($script:Demo) { $wert = & $q.Demo } else { $wert = & $q.Echt }
-    } catch {
-        $wert = [pscustomobject]@{ fehler = $_.Exception.Message }
+    if ($script:Lokal -and $Name -ne 'lokal') {
+        # Ohne Zugangsdaten macht ein Aufruf an die Box keinen Sinn.
+        $wert = [pscustomobject]@{ fehler = 'Keine Zugangsdaten hinterlegt — dieser Bereich braucht Zugriff auf die FRITZ!Box.' }
+    } else {
+        try {
+            if ($script:Demo) { $wert = & $q.Demo } else { $wert = & $q.Echt }
+        } catch {
+            $wert = [pscustomobject]@{ fehler = $_.Exception.Message }
+        }
     }
     if ($q.Sek -gt 0) { $script:Cache[$Name] = @{ Zeit = (Get-Date); Wert = $wert } }
     $wert
@@ -386,6 +394,42 @@ function Get-AnsichtHardware {
     }
 }
 
+function Get-AnsichtLokalnetz {
+    param([switch] $MitScan)
+    $scan = $null
+    if ($MitScan) {
+        # Der Scan dauert einige Sekunden und laeuft nur auf ausdrueckliche
+        # Anforderung, nicht bei jedem Aktualisieren.
+        try { $scan = Invoke-Netzscan } catch { $scan = [pscustomobject]@{ fehler = $_.Exception.Message } }
+        $script:Cache['scan'] = @{ Zeit = (Get-Date); Wert = $scan }
+    } else {
+        $e = $script:Cache['scan']
+        if ($e) { $scan = $e.Wert }
+    }
+
+    [pscustomobject]@{
+        Zeit      = (Get-Date).ToString('HH:mm:ss')
+        Scan      = $scan
+        ScanAlter = $(if ($script:Cache['scan']) { [int]((Get-Date) - $script:Cache['scan'].Zeit).TotalSeconds } else { $null })
+        Anbindung = Zwischen-Lokal 'anbindung' 30 { Get-EigeneAnbindung }
+        Internet  = Zwischen-Lokal 'internetguete' 45 { Measure-Internetguete }
+        Weg       = Zwischen-Lokal 'weg' 120 { Get-Wegverfolgung }
+        Dienste   = Zwischen-Lokal 'dienste' 60 { Get-OffeneDienste }
+    }
+}
+
+# Eigener kleiner Zwischenspeicher fuer die lokalen Messungen - sie gehen
+# nicht ueber Get-Quellen, weil sie keine Box-Entsprechung haben.
+function Zwischen-Lokal {
+    param([string]$Schluessel, [int]$Sekunden, [scriptblock]$Abruf)
+    $e = $script:Cache["lok_$Schluessel"]
+    if ($e -and ((Get-Date) - $e.Zeit).TotalSeconds -lt $Sekunden) { return $e.Wert }
+    $w = $null
+    try { $w = & $Abruf } catch { $w = [pscustomobject]@{ fehler = $_.Exception.Message } }
+    $script:Cache["lok_$Schluessel"] = @{ Zeit = (Get-Date); Wert = $w }
+    $w
+}
+
 function Get-AnsichtGeraete {
     [pscustomobject]@{
         Zeit    = (Get-Date).ToString('HH:mm:ss')
@@ -522,13 +566,9 @@ function Start-Panel {
     if (-not $script:Demo) {
         try { $script:Cred = Get-Zugang }
         catch {
-            Write-Host ""
-            Write-Host "  $($_.Exception.Message)" -ForegroundColor Red
-            Write-Host ""
-            Write-Host "  Einrichten:              netzpanel einrichten" -ForegroundColor Yellow
-            Write-Host "  Oberfläche ansehen:      netzpanel demo" -ForegroundColor Yellow
-            Write-Host ""
-            return
+            # Ohne Zugangsdaten wird nicht abgebrochen. Das Panel startet im
+            # Lokal-Modus und zeigt alles, was ohne die Box messbar ist.
+            $script:Lokal = $true
         }
     }
 
@@ -548,8 +588,15 @@ function Start-Panel {
     Write-Host ""
     Write-Host "  Netzwerk-Panel läuft" -ForegroundColor Green
     Write-Host "  $adresse" -ForegroundColor Cyan
-    if ($script:Demo) { Write-Host "  BEISPIELMODUS — keine echten Daten, nichts wird geschaltet" -ForegroundColor Yellow }
-    else { Write-Host "  verbunden mit $($konfig.BoxAdresse)" -ForegroundColor DarkGray }
+    if ($script:Demo) {
+        Write-Host "  BEISPIELMODUS — keine echten Daten, nichts wird geschaltet" -ForegroundColor Yellow
+    } elseif ($script:Lokal) {
+        Write-Host "  LOKAL-MODUS — keine Zugangsdaten hinterlegt" -ForegroundColor Yellow
+        Write-Host "  Netzwerk-Scan, Leitungsgüte und PC-Daten funktionieren." -ForegroundColor DarkGray
+        Write-Host "  Für Mesh, Funk, Smart Home und Sicherheit: netzpanel einrichten" -ForegroundColor DarkGray
+    } else {
+        Write-Host "  verbunden mit $($konfig.BoxAdresse)" -ForegroundColor DarkGray
+    }
     Write-Host ""
     Write-Host "  Beenden mit Strg+C" -ForegroundColor DarkGray
     Write-Host ""
@@ -598,6 +645,8 @@ function Start-Panel {
                     '^/api/protokoll$'   { Send-Json $strom (Get-AnsichtProtokoll);   break }
                     '^/api/telefonie$'   { Send-Json $strom (Get-AnsichtTelefonie);   break }
                     '^/api/pc$'          { Send-Json $strom (Get-AnsichtPc);          break }
+                    '^/api/lokalnetz$'   { Send-Json $strom (Get-AnsichtLokalnetz);   break }
+                    '^/api/scan$'        { Send-Json $strom (Get-AnsichtLokalnetz -MitScan); break }
 
                     '^/api/einstellungen$' {
                         if ($anf.Methode -eq 'POST') {
@@ -612,6 +661,7 @@ function Start-Panel {
                             Send-Json $strom ([pscustomobject]@{
                                 Konfig      = $konfig
                                 Demo        = $script:Demo
+                                Lokal       = $script:Lokal
                                 ZugangDa    = (Test-ZugangVorhanden)
                                 KonfigPfad  = (Get-KonfigPfad)
                             })

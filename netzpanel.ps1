@@ -23,6 +23,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'src\tr064.ps1')
 . (Join-Path $PSScriptRoot 'src\analyse.ps1')
 . (Join-Path $PSScriptRoot 'src\hardware.ps1')
+. (Join-Path $PSScriptRoot 'src\lokal.ps1')
 . (Join-Path $PSScriptRoot 'src\demo.ps1')
 . (Join-Path $PSScriptRoot 'src\server.ps1')
 

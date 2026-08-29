@@ -258,6 +258,7 @@ const SYM = {
   uebersicht:'<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
   optimierung:'<path d="M3 17l5-5 4 4 8-8"/><path d="M16 8h5v5"/>',
   simulator:'<circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/>',
+  lokalnetz:'<circle cx="11" cy="11" r="7"/><path d="M16.5 16.5L21 21"/><path d="M11 8v6M8 11h6"/>',
   mesh:'<circle cx="12" cy="4" r="2"/><circle cx="4" cy="19" r="2"/><circle cx="20" cy="19" r="2"/><path d="M12 6v6M12 12l-7 5M12 12l7 5"/>',
   geraete:'<rect x="2" y="5" width="14" height="10" rx="1"/><path d="M6 19h10"/><rect x="18" y="10" width="4" height="9" rx="1"/>',
   funk:'<path d="M2 8a15 15 0 0120 0M5.5 11.5a10 10 0 0113 0M9 15a5 5 0 016 0"/><circle cx="12" cy="19" r="1.2"/>',
@@ -278,6 +279,7 @@ const ANSICHTEN = [
   { id:'uebersicht',    name:'Übersicht',     gruppe:'Überblick', route:'/api/uebersicht',  takt:6000  },
   { id:'optimierung',   name:'Optimierung',   gruppe:'Überblick', route:'/api/optimierung', takt:30000 },
   { id:'simulator',     name:'Simulator',     gruppe:'Überblick', route:'/api/simulator',   takt:0     },
+  { id:'lokalnetz',     name:'Netzwerk-Scan', gruppe:'Netz',      route:'/api/lokalnetz',   takt:0     },
   { id:'mesh',          name:'Mesh',          gruppe:'Netz',      route:'/api/mesh',        takt:20000 },
   { id:'geraete',       name:'Geräte',        gruppe:'Netz',      route:'/api/geraete',     takt:10000 },
   { id:'funk',          name:'Funk',          gruppe:'Netz',      route:'/api/funk',        takt:20000 },
@@ -415,13 +417,14 @@ function zeichnen(){
   const f={uebersicht:zUebersicht,optimierung:zOptimierung,simulator:zSimulator,mesh:zMesh,
            geraete:zGeraete,funk:zFunk,mobil:zMobil,leitung:zLeitung,sicherheit:zSicherheit,
            protokoll:zProtokoll,smarthome:zSmartHome,telefonie:zTelefonie,hardware:zHardware,
-           pc:zPc,einstellungen:zEinstellungen}[aktiv];
+           lokalnetz:zLokalnetz,pc:zPc,einstellungen:zEinstellungen}[aktiv];
   document.getElementById('buehne').innerHTML=
     '<div class="kopfzeile"><h1>'+esc(ANSICHTEN.find(x=>x.id===aktiv).name)+'</h1>'+
     (ERKLAERUNG[aktiv]?'<span class="erklaer">'+esc(ERKLAERUNG[aktiv])+'</span>':'')+'</div>'+f(d);
 }
 
 const ERKLAERUNG={
+  lokalnetz:'Was dein Rechner selbst über das Netz herausfinden kann — ohne Zugang zur FRITZ!Box.',
   optimierung:'Was im Funknetz Leistung kostet — und was es bringen würde, das zu ändern.',
   simulator:'Umbauten durchrechnen, bevor man sie macht. Es wird nichts geschaltet.',
   mobil:'Was der Verbindung von Handys und Tablets im Weg steht.',
@@ -1205,6 +1208,157 @@ function zTelefonie(d){
   return h;
 }
 
+/* ====================================================== NETZWERK-SCAN */
+function zLokalnetz(d){
+  let h='';
+  const s=d.Scan;
+
+  // --- Scan
+  const werkz='<button class="kn stark" id="scanKn" onclick="scanStarten()">'+
+    (s?'Erneut suchen':'Suche starten')+'</button>';
+
+  if(!s){
+    h+=karte('Geräte im Netz',
+      '<div class="strip s-info"><div><b>Noch nicht gesucht</b><span>Der Suchlauf spricht alle 254 '+
+      'Adressen deines Netzes gleichzeitig an und löst ihre Namen auf. Das dauert etwa fünf Sekunden '+
+      'und braucht keinen Zugang zur FRITZ!Box.</span></div></div>',
+      {voll:true,werkzeug:werkz});
+  } else if(istFehler(s)){
+    h+=karte('Geräte im Netz',fehlerBlock(s,'Suchlauf'),{voll:true,werkzeug:werkz});
+  } else {
+    const g=arr(s.Gefunden);
+    const online=g.filter(x=>x.Erreichbar).length;
+    const zeilen=g.map(x=>{
+      const k=x.Ms===null||x.Ms===undefined?'':(x.Ms<=1?'pos':(x.Ms<=5?'krit':'neg'));
+      let rolle='';
+      if(x.Rolle==='Router') rolle='<span class="pille p-brand">Router</span>';
+      else if(x.Rolle==='dieser Rechner') rolle='<span class="pille p-info">dieser PC</span>';
+      else if(!x.Erreichbar) rolle='<span class="pille p-neutral">nur bekannt</span>';
+      return '<tr><td class="m">'+esc(x.IP)+'</td>'+
+        '<td>'+(x.Name?esc(x.Name):'<span class="zart">ohne Namen</span>')+'</td>'+
+        '<td class="m zart">'+esc(x.MAC||'—')+'</td>'+
+        '<td>'+(x.Hersteller?esc(x.Hersteller):'<span class="zart">—</span>')+'</td>'+
+        '<td class="m r"'+(k?' style="color:var(--'+k+')"':'')+'>'+
+          (x.Ms!==null&&x.Ms!==undefined?x.Ms+' ms':'—')+'</td>'+
+        '<td>'+rolle+'</td></tr>';
+    }).join('');
+
+    h+=karte('Geräte im Netz',
+      '<div class="werkzeug" style="border-top:none">'+
+        '<div><div class="zart">Netz</div><b class="m">'+esc(s.Netz)+'</b></div>'+
+        '<div><div class="zart">gefunden</div><b class="m" style="font-size:15px">'+g.length+'</b></div>'+
+        '<div><div class="zart">davon erreichbar</div><b class="m" style="font-size:15px;color:var(--pos)">'+
+          online+'</b></div>'+
+        '<div style="margin-left:auto" class="zart">Stand '+esc(s.Zeit)+'</div>'+
+      '</div>'+
+      '<div class="rollt"><table><thead><tr><th class="m">Adresse</th><th>Name</th>'+
+      '<th class="m">MAC</th><th>Hersteller</th><th class="r">Antwort</th><th></th></tr></thead>'+
+      '<tbody>'+zeilen+'</tbody></table></div>',
+      {voll:true,roh:true,werkzeug:werkz});
+
+    h+='<div class="hilfe" style="padding:0 2px;margin:-6px 0 14px">Geräte ohne Antwort, die trotzdem '+
+       'auftauchen, standen in der Adresstabelle deines Rechners — sie waren kürzlich da und schweigen '+
+       'gerade. „Zufällige Adresse" heißt: Das Gerät vergibt seine MAC selbst neu, wie es Handys zum '+
+       'Schutz vor Verfolgung tun.</div>';
+  }
+
+  h+='<div class="gitter g2">';
+
+  // --- Eigene Anbindung
+  const ab=arr(d.Anbindung);
+  if(ab.length){
+    h+=karte('Deine Anbindung',ab.map(a=>
+      '<div style="padding:9px 0;border-bottom:1px solid var(--linie)">'+
+      '<div style="font-weight:600">'+esc(a.Name)+'</div>'+
+      '<div class="zart">'+esc(a.Karte)+'</div>'+
+      '<dl class="kv" style="margin-top:7px">'+
+        '<dt>Adresse</dt><dd>'+esc(a.IP)+'</dd>'+
+        '<dt>Verbindung</dt><dd>'+esc(a.LinkSpeed)+'</dd>'+
+        '<dt>Router</dt><dd>'+esc(a.Gateway)+'</dd>'+
+        '<dt>Namensauflösung</dt><dd>'+esc(arr(a.Dns).join(', ')||'—')+'</dd>'+
+      '</dl>'+
+      (a.KannMehr?'<div class="strip s-info" style="margin-top:9px"><div>'+
+        '<b>Läuft unter ihrem Können</b><span>Diese Karte beherrscht '+esc(a.KannMehr)+
+        ', handelt aber '+esc(a.LinkSpeed)+' aus. Die Gegenstelle gibt nicht mehr her.</span></div>'+
+        '<button class="kn klein" onclick="wechseln(\'hardware\')">Beratung</button></div>':'')+
+      '</div>').join(''));
+  }
+
+  // --- Internet-Güte
+  const net=arr(d.Internet);
+  if(net.length){
+    h+=karte('Güte der Internetverbindung',
+      '<table><thead><tr><th>Ziel</th><th class="r">min</th><th class="r">Schnitt</th>'+
+      '<th class="r">max</th><th class="r">Schwankung</th><th class="r">Verlust</th></tr></thead><tbody>'+
+      net.map(x=>{
+        const kl=x.VerlustProzent>0?'neg':(x.Jitter>10?'krit':(x.Schnitt>40?'krit':'pos'));
+        return '<tr><td>'+esc(x.Ziel)+'<div class="zart m">'+esc(x.IP)+'</div></td>'+
+          '<td class="m r">'+(x.Min??'—')+'</td>'+
+          '<td class="m r" style="color:var(--'+kl+')">'+(x.Schnitt??'—')+'</td>'+
+          '<td class="m r">'+(x.Max??'—')+'</td>'+
+          '<td class="m r">'+(x.Jitter??'—')+'</td>'+
+          '<td class="m r"'+(x.VerlustProzent>0?' style="color:var(--neg)"':'')+'>'+
+            x.VerlustProzent+' %</td></tr>';
+      }).join('')+'</tbody></table>'+
+      '<div class="hilfe" style="margin-top:11px">Die Schwankung sagt mehr über die Güte einer Leitung '+
+      'als der Mittelwert: Sie ist es, die Videoanrufe stocken und Spiele ruckeln lässt. Unter 5 ms ist '+
+      'gut, über 20 ms wird es spürbar.</div>',{roh:false});
+  }
+  h+='</div><div class="gitter g2">';
+
+  // --- Weg ins Internet
+  const weg=arr(d.Weg);
+  if(weg.length){
+    h+=karte('Weg ins Internet',
+      weg.map(x=>{
+        const kl=x.Ms===null||x.Ms===undefined?'aus':(x.Ms<=15?'pos':(x.Ms<=50?'krit':'neg'));
+        return '<div style="display:flex;gap:11px;align-items:baseline;padding:6px 0;'+
+          'border-bottom:1px solid var(--linie)">'+
+          '<span class="m zart" style="width:22px">'+x.Sprung+'.</span>'+
+          '<span class="m">'+esc(x.IP)+'</span>'+
+          (x.Privat?'<span class="pille p-neutral">im Haus</span>':'')+
+          (x.Name?'<span class="zart" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px">'+esc(x.Name)+'</span>':'')+
+          '<span class="m" style="margin-left:auto;color:var(--'+kl+')">'+
+            (x.Ms!==null&&x.Ms!==undefined?x.Ms+' ms':'*')+'</span></div>';
+      }).join('')+
+      '<div class="hilfe" style="margin-top:11px">Der erste Sprung ist dein Router. Springt die Zeit '+
+      'erst danach nach oben, liegt es an der Leitung oder am Anbieter — nicht an deinem Netz.</div>');
+  }
+
+  // --- Offene Dienste
+  const di=arr(d.Dienste);
+  if(di.length){
+    const heikel=di.filter(x=>x.Beachten).length;
+    h+=karte('Offene Dienste auf diesem PC',
+      '<table><thead><tr><th class="r m">Port</th><th>Programm</th><th>Dienst</th></tr></thead><tbody>'+
+      di.map(x=>'<tr><td class="m r"'+(x.Beachten?' style="color:var(--krit)"':'')+'>'+x.Port+'</td>'+
+        '<td>'+esc(x.Prozess||'—')+'</td>'+
+        '<td class="zart">'+esc(x.Dienst||'')+'</td></tr>').join('')+
+      '</tbody></table>'+
+      '<div class="hilfe" style="margin-top:11px">Jeder Eintrag ist eine Tür, die im Netz offensteht. '+
+      (heikel?'Die '+heikel+' hervorgehobenen sind Windows-Dienste, die in einem Netz mit fremden '+
+       'Geräten nichts zu suchen haben — dort lohnt eine Firewall-Regel.'
+      :'Nichts davon ist auffällig.')+'</div>',
+      {zahl:di.length+' offen'});
+  }
+
+  return h+'</div>';
+}
+
+async function scanStarten(){
+  const kn=document.getElementById('scanKn');
+  if(kn){ kn.disabled=true; kn.textContent='sucht …'; }
+  try{
+    const r=await fetch('/api/scan',{cache:'no-store'});
+    const d=await r.json();
+    daten.lokalnetz=d;
+    zeichnen();
+  }catch(e){
+    alert('Suchlauf fehlgeschlagen: '+e.message);
+    if(kn){ kn.disabled=false; kn.textContent='Suche starten'; }
+  }
+}
+
 /* ========================================================== DIESER PC */
 function zPc(d){
   const l=d.Lokal;
@@ -1330,17 +1484,26 @@ function kopieren(id){
 
 /* =============================================================== Start */
 navBauen();
-const ausHash=location.hash.replace('#','');
-if(ANSICHTEN.some(a=>a.id===ausHash)) aktiv=ausHash;
-wechseln(aktiv);
 
-// Beispielmodus in der Kopfzeile anzeigen
+// Zuerst den Betriebszustand klären: ohne Zugangsdaten ist die Übersicht leer,
+// dann startet das Panel sinnvollerweise beim Netzwerk-Scan.
 fetch('/api/einstellungen').then(r=>r.json()).then(d=>{
+  const ausHash=location.hash.replace('#','');
   if(d.Demo){
     document.getElementById('led').classList.add('demo');
     document.getElementById('shellSub').textContent='Beispielmodus — keine echten Daten';
+  } else if(d.Lokal){
+    document.getElementById('led').classList.add('demo');
+    document.getElementById('shellSub').textContent='Lokal-Modus — ohne Zugang zur FRITZ!Box';
+    if(!ausHash) aktiv='lokalnetz';
   }
-}).catch(()=>{});
+  if(ANSICHTEN.some(a=>a.id===ausHash)) aktiv=ausHash;
+  wechseln(aktiv);
+}).catch(()=>{
+  const ausHash=location.hash.replace('#','');
+  if(ANSICHTEN.some(a=>a.id===ausHash)) aktiv=ausHash;
+  wechseln(aktiv);
+});
 </script>
 </body>
 </html>

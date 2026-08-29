@@ -101,6 +101,26 @@ Vergleicht den gemessenen Zustand mit einer gepflegten Gerätedatenbank und
 schlägt vor, was sich lohnt — mit Begründung aus den eigenen Messwerten,
 Dringlichkeit und Preisspanne. Wenn nichts anzuschaffen ist, steht das dort auch.
 
+### Netzwerk-Scan — funktioniert ohne die FRITZ!Box
+
+Sind keine Zugangsdaten hinterlegt, startet das Panel im **Lokal-Modus** statt
+abzubrechen. Alles, was der eigene Rechner ohne den Router herausfinden kann,
+steht dann zur Verfügung:
+
+- **Suchlauf** über alle 254 Adressen des Netzes, mit Namensauflösung und
+  Herstellerzuordnung über die MAC-Adresse — dauert etwa fünf Sekunden. Er findet
+  regelmäßig Geräte, die in der Routerliste nicht auffallen.
+- **Güte der Internetverbindung**: Antwortzeit, Schwankung und Paketverlust zu
+  drei Zielen. Die Schwankung sagt mehr über eine Leitung als der Mittelwert.
+- **Weg ins Internet** Sprung für Sprung — zeigt, ob eine Verzögerung im eigenen
+  Netz entsteht oder erst beim Anbieter.
+- **Offene Dienste** auf dem eigenen Rechner, mit Hinweis auf die, die in einem
+  Netz mit fremden Geräten nichts zu suchen haben.
+
+Die Zuordnung erfolgt über eine eingebaute Herstellerliste, nicht über eine
+Online-Abfrage: Das Panel funktioniert ohne Internetzugang und meldet nichts
+nach außen.
+
 ### Weitere Ansichten
 
 | Ansicht | Inhalt |
@@ -151,6 +171,7 @@ src/
   analyse.ps1        Sendezeit-Modell, Simulator, Vorschläge, Mobilanalyse
   hardware.ps1       Kaufberatung aus dem gemessenen Zustand
   server.ps1         Webserver, Datenquellen, Bewertung, Ansichten
+  lokal.ps1          Messungen ohne die FRITZ!Box: Suchlauf, Wegverfolgung, Leitungsgüte
   demo.ps1           erfundene Beispieldaten
 data/
   hardware.json      Gerätedatenbank — hier pflegen, nicht im Code
