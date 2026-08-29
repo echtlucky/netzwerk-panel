@@ -452,41 +452,113 @@ function Get-FritzWlan {
     $ergebnis
 }
 
-# Alle Funk-Clients mit Signalstaerke und ausgehandelter Datenrate.
+# Alle Funk-Clients mit Signalstaerke, Datenrate und Zugangspunkt.
+#
+# Die naheliegende Quelle waere GetGenericAssociatedDeviceInfo je WLAN-Instanz.
+# Die kennt aber nur Geraete, die unmittelbar an der Box haengen - in einem Mesh
+# sind das oft null, weil alle ueber die Repeater laufen. Die Mesh-Liste erfasst
+# dagegen jede Funkstrecke im Haus und nennt zusaetzlich, an welchem Knoten ein
+# Geraet haengt.
 function Get-FritzWlanClients {
-    param($Credential)
-    $namen = @{ 1 = '2,4 GHz'; 2 = '5 GHz'; 3 = 'Gastnetz' }
-    $liste = @()
-    foreach ($i in 1..3) {
-        $anzahl = 0
-        try {
-            $a = Invoke-Tr064 -Control "/upnp/control/wlanconfig$i" `
-                              -Service "urn:dslforum-org:service:WLANConfiguration:$i" `
-                              -Action  'GetTotalAssociations' -Credential $Credential
-            $anzahl = [int]$a.NewTotalAssociations
-        } catch { continue }
+    param($Credential, $Mesh)
+    # Die Mesh-Liste kann uebergeben werden, wenn der Aufrufer sie ohnehin
+    # schon geholt hat - sie zweimal abzurufen kostet mehrere Sekunden.
+    if ($Mesh) { $mesh = $Mesh }
+    else {
+        if (-not $Credential) { $Credential = Get-FritzCredential }
+        $mesh = Get-FritzMesh -Credential $Credential
+    }
 
-        for ($n = 0; $n -lt $anzahl; $n++) {
-            try {
-                $c = Invoke-Tr064 -Control "/upnp/control/wlanconfig$i" `
-                                  -Service "urn:dslforum-org:service:WLANConfiguration:$i" `
-                                  -Action  'GetGenericAssociatedDeviceInfo' `
-                                  -Arguments @{ NewAssociatedDeviceIndex = $n } -Credential $Credential
-                $liste += [pscustomobject]@{
-                    Band       = $namen[$i]
-                    BandIndex  = $i
-                    MAC        = $c.NewAssociatedDeviceMACAddress
-                    IP         = $c.NewAssociatedDeviceIPAddress
-                    Angemeldet = ($c.NewAssociatedDeviceAuthState -eq '1')
-                    SpeedMbit  = [int]$c.'NewX_AVM-DE_Speed'
-                    Signal     = [int]$c.'NewX_AVM-DE_SignalStrength'
+    $knoten = @{}
+    foreach ($n in $mesh.nodes) { $knoten[$n.uid] = $n }
+
+    # Interface-Kennung -> Knoten, um den Zugangspunkt einer Strecke zu finden
+    $ifZuKnoten = @{}
+    foreach ($n in $mesh.nodes) {
+        foreach ($i in $n.node_interfaces) { $ifZuKnoten[$i.uid] = $n }
+    }
+
+    $liste = @()
+    foreach ($n in $mesh.nodes) {
+        if ($n.is_meshed) { continue }        # Repeater und Router selbst ueberspringen
+
+        foreach ($i in $n.node_interfaces) {
+            if ($i.type -ne 'WLAN') { continue }
+            foreach ($l in $i.node_links) {
+                if ($l.state -ne 'CONNECTED') { continue }
+
+                # Gegenstelle bestimmen - das ist der Zugangspunkt
+                $gegenIf = $l.node_interface_2_uid
+                if ($l.node_interface_1_uid -ne $i.uid) { $gegenIf = $l.node_interface_1_uid }
+                $ap = $ifZuKnoten[$gegenIf]
+
+                # Das Interface des Zugangspunkts kennt Kanal und Netzname
+                $apIf = $null
+                if ($ap) {
+                    foreach ($x in $ap.node_interfaces) { if ($x.uid -eq $gegenIf) { $apIf = $x; break } }
                 }
-            } catch { }
+
+                $kanal = 0
+                if ($apIf -and $apIf.current_channel) { $kanal = [int]$apIf.current_channel }
+                elseif ($i.current_channel)            { $kanal = [int]$i.current_channel }
+
+                $ssid = ''
+                if ($apIf -and $apIf.ssid) { $ssid = $apIf.ssid }
+                elseif ($i.ssid)           { $ssid = $i.ssid }
+
+                $band = '5 GHz'
+                if ($kanal -gt 0 -and $kanal -le 14) { $band = '2,4 GHz' }
+                elseif ($kanal -ge 32 -and $kanal -le 177) { $band = '5 GHz' }
+                elseif ($kanal -gt 177) { $band = '6 GHz' }
+
+                # Fuer die Sendezeit zaehlt die ausgehandelte Rate (max), nicht der
+                # momentane Durchsatz (cur): ein Geraet im Leerlauf meldet dort 6 Mbit,
+                # sendet aber mit seiner ausgehandelten Rate, sobald es etwas zu tun hat.
+                $rate = [Math]::Max([double]$l.max_data_rate_rx, [double]$l.max_data_rate_tx) / 1000
+                if ($rate -le 0) {
+                    $rate = [Math]::Max([double]$l.cur_data_rate_rx, [double]$l.cur_data_rate_tx) / 1000
+                }
+                $jetzt = [Math]::Max([double]$l.cur_data_rate_rx, [double]$l.cur_data_rate_tx) / 1000
+
+                $ip = ''
+                if ($n.ip_addresses -and @($n.ip_addresses).Count -gt 0) { $ip = @($n.ip_addresses)[0] }
+
+                $liste += [pscustomobject]@{
+                    Band       = $band
+                    BandIndex  = $(if ($band -eq '2,4 GHz') { 1 } else { 2 })
+                    MAC        = $n.device_mac_address
+                    IP         = $ip
+                    Name       = $n.device_name
+                    Angemeldet = $true
+                    SpeedMbit  = [math]::Round($rate)
+                    JetztMbit  = [math]::Round($jetzt)
+                    Signal     = (ConvertFrom-Rcpi -Rcpi $l.rx_rcpi)
+                    SignalDbm  = $(if ($null -ne $l.rx_rcpi -and [double]$l.rx_rcpi -lt 0) { [int]$l.rx_rcpi } else { $null })
+                    Kanal      = $kanal
+                    Netzname   = $ssid
+                    Zugangspunkt = $(if ($ap) { $ap.device_name } else { '' })
+                }
+            }
         }
     }
     $liste
 }
 
+# Die Box liefert die Empfangsstaerke im Feld rx_rcpi bereits als dBm, also als
+# negative Zahl (etwa -53). Der Wert 255 bedeutet "nicht bekannt".
+# Umgerechnet wird auf einen Prozentwert, bei dem -50 dBm voll und -100 dBm
+# leer entspricht - dieselbe Skala, die Windows fuer WLAN-Balken benutzt.
+function ConvertFrom-Rcpi {
+    param($Rcpi)
+    if ($null -eq $Rcpi) { return 0 }
+    $wert = [double]$Rcpi
+    if ($wert -ge 0) { return 0 }        # 255 oder 0: unbekannt
+    if ($wert -lt -120) { return 0 }
+    $prozent = 2 * ($wert + 100)
+    if ($prozent -lt 0)   { return 0 }
+    if ($prozent -gt 100) { return 100 }
+    [math]::Round($prozent)
+}
 function Set-FritzWlan {
     param([Parameter(Mandatory)][int]$Index, [Parameter(Mandatory)][bool]$An, $Credential)
     $wert = '0'; if ($An) { $wert = '1' }

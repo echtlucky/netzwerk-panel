@@ -25,10 +25,13 @@ function Get-Quellen {
         dslfehler = @{ Sek=90;  Echt={ Get-FritzDslFehler        -Credential $script:Cred }; Demo={ Get-DemoDslFehler } }
         lan       = @{ Sek=60;  Echt={ Get-FritzLanStatistik     -Credential $script:Cred }; Demo={ [pscustomobject]@{ Status='Up'; MacAdresse='02:1A:2B:00:00:00'; PaketeGesendet=884213377; PaketeEmpfangen=4127884991 } } }
         wlan      = @{ Sek=25;  Echt={ Get-FritzWlan             -Credential $script:Cred }; Demo={ Get-DemoWlan } }
-        funk      = @{ Sek=30;  Echt={ Get-FritzWlanClients      -Credential $script:Cred }; Demo={ Get-DemoFunkClients } }
+        funk      = @{ Sek=30;  Echt={ Get-FritzWlanClients -Mesh (Hole 'meshroh') }; Demo={ Get-DemoFunkClients } }
         gast      = @{ Sek=120; Echt={ Get-FritzGastZugang       -Credential $script:Cred }; Demo={ [pscustomobject]@{ SSID='Heimnetz-Gast'; An=$true; Schluessel='BeispielSchluessel1234'; Schutz='11i' } } }
         hosts     = @{ Sek=8;   Echt={ Get-FritzHosts            -Credential $script:Cred }; Demo={ Get-DemoHosts } }
-        mesh      = @{ Sek=20;  Echt={ ConvertTo-MeshUebersicht -Mesh (Get-FritzMesh -Credential $script:Cred) }; Demo={ Get-DemoMeshRoh } }
+        # Die rohe Mesh-Liste ist die teuerste Abfrage der Box. Topologie und
+        # Funk-Clients bauen beide darauf auf und teilen sich deshalb den Abruf.
+        meshroh   = @{ Sek=20;  Echt={ Get-FritzMesh -Credential $script:Cred }; Demo={ $null } }
+        mesh      = @{ Sek=20;  Echt={ ConvertTo-MeshUebersicht -Mesh (Hole 'meshroh') }; Demo={ Get-DemoMeshRoh } }
         sicher    = @{ Sek=120; Echt={ Get-FritzSicherheitslage  -Credential $script:Cred }; Demo={ Get-DemoSicherheitLage } }
         ports     = @{ Sek=120; Echt={ Get-FritzPortfreigaben    -Credential $script:Cred }; Demo={ Get-DemoPortfreigaben } }
         protokoll = @{ Sek=30;  Echt={ Get-FritzProtokoll        -Credential $script:Cred }; Demo={ Get-DemoProtokollEintraege } }
@@ -106,9 +109,11 @@ function ConvertTo-MeshUebersicht {
                 if ($ni.type -eq 'WLAN') { $band = $ni.name }
 
                 $verbindungen += [pscustomobject]@{
-                    Von   = $n.device_name
-                    Nach  = $gegen.device_name
-                    Art   = $ni.type
+                    Von      = $n.device_name
+                    Nach     = $gegen.device_name
+                    # true heisst: ueber diese Strecke erreicht "Von" den Router
+                    VonUplink = [bool]$ni.is_upstream
+                    Art      = $ni.type
                     Band  = $band
                     MaxRx = [math]::Round([double]$nl.max_data_rate_rx / 1000, 0)
                     MaxTx = [math]::Round([double]$nl.max_data_rate_tx / 1000, 0)
@@ -119,6 +124,57 @@ function ConvertTo-MeshUebersicht {
         }
     }
 
+    # Wie viele Funkstrecken liegen zwischen einem Knoten und dem Router?
+    # Repeater koennen sich hintereinander schalten - dann geht der Verkehr
+    # eines Geraets mehrfach durch die Luft, und jeder Sprung kostet grob die
+    # Haelfte des Durchsatzes.
+    #
+    # Ausgewertet werden die Interface-Namen der Rohdaten: AVM benennt die
+    # Richtung zum Router mit "UPLINK:..." und die zu den Geraeten mit "AP:...".
+    # Das Feld is_upstream waere naheliegender, ist aber nicht in jeder
+    # Firmware gesetzt. Die aufbereitete Verbindungsliste taugt ebenfalls nicht,
+    # weil sie jede Strecke nur einmal fuehrt und offenlaesst, aus wessen Sicht.
+    $uplinkZiel = @{}
+    $uplinkArt  = @{}
+    foreach ($n in $Mesh.nodes) {
+        if (-not $n.is_meshed) { continue }
+        foreach ($ni in $n.node_interfaces) {
+            $istUplink = $false
+            if ($ni.is_upstream) { $istUplink = $true }
+            elseif ($ni.name -match '^(?i)uplink') { $istUplink = $true }
+            if (-not $istUplink) { continue }
+            foreach ($nl in $ni.node_links) {
+                if ($nl.state -ne 'CONNECTED') { continue }
+                $gegenUid = $nl.node_2_uid
+                if ($gegenUid -eq $n.uid) { $gegenUid = $nl.node_1_uid }
+                $gegen = $knoten[$gegenUid]
+                if (-not $gegen -or -not $gegen.is_meshed) { continue }
+                # Bei mehreren Uplinks zaehlt der erste gefundene
+                if (-not $uplinkZiel.ContainsKey($n.device_name)) {
+                    $uplinkZiel[$n.device_name] = $gegen.device_name
+                    $uplinkArt[$n.device_name]  = $ni.type
+                }
+            }
+        }
+    }
+
+    # Vom Knoten aus dem Weg nach oben folgen und die Funkstrecken zaehlen.
+    # Wer keinen Uplink meldet, haengt am Kabel oder ist der Router selbst.
+    $tiefe = @{}
+    foreach ($n in $Mesh.nodes) {
+        if (-not $n.is_meshed) { continue }
+        $name = $n.device_name
+        $zaehler = 0
+        $aktuell = $name
+        $besucht = @{}
+        while ($uplinkZiel.ContainsKey($aktuell) -and -not $besucht[$aktuell]) {
+            $besucht[$aktuell] = $true
+            if ($uplinkArt[$aktuell] -eq 'WLAN') { $zaehler++ }
+            $aktuell = $uplinkZiel[$aktuell]
+            if ($besucht.Count -gt 10) { break }
+        }
+        $tiefe[$name] = $zaehler
+    }
     $geraete = @()
     foreach ($n in $Mesh.nodes) {
         if (-not $n.is_meshed) { continue }
@@ -132,9 +188,18 @@ function ConvertTo-MeshUebersicht {
                 }
             }
         }
+        $funksprunge = $null
+        if ($tiefe.ContainsKey($n.device_name)) { $funksprunge = $tiefe[$n.device_name] }
+        # Ueber welchen Knoten laeuft der Weg zum Router?
+        $ueber = ''
+        if ($funksprunge -gt 0 -and $uplinkZiel.ContainsKey($n.device_name)) {
+            $ueber = $uplinkZiel[$n.device_name]
+        }
+
         $geraete += [pscustomobject]@{
             Name = $n.device_name; Modell = $n.device_model; Firmware = $n.device_firmware_version
             Rolle = $n.mesh_role;  MAC = $n.device_mac_address; Clients = $clients
+            Funksprunge = $funksprunge; Ueber = $ueber
         }
     }
 
@@ -286,10 +351,40 @@ function Get-Warnungen {
         }
     }
     if (-not (IstFehler $mesh)) {
+        # Ein Repeater kann ueber mehrere Baender angebunden sein. Gemeldet wird
+        # je Knoten nur seine beste Strecke - sonst stuende derselbe Repeater
+        # mehrfach in der Liste.
+        $besteJeKnoten = @{}
         foreach ($v in $mesh.Verbindungen) {
+            if ($v.Art -ne 'WLAN') { continue }
             $max = [Math]::Max($v.MaxRx, $v.MaxTx)
-            if ($v.Art -eq 'WLAN' -and $max -lt $Konfig.MeshFunkKnapp -and $max -gt 0) {
-                & $melde 'warn' "Schwache Mesh-Strecke: $($v.Nach)" "Nur $max Mbit/s per Funk. Jedes Datenpaket geht zweimal durch die Luft." 'mesh'
+            if ($max -le 0) { continue }
+            foreach ($ziel in @($v.Von, $v.Nach)) {
+                $istKnoten = $false
+                foreach ($k in $mesh.Knoten) { if ($k.Name -eq $ziel -and $k.Rolle -ne 'master') { $istKnoten = $true } }
+                if (-not $istKnoten) { continue }
+                if (-not $besteJeKnoten.ContainsKey($ziel) -or $besteJeKnoten[$ziel] -lt $max) {
+                    $besteJeKnoten[$ziel] = $max
+                }
+            }
+        }
+        foreach ($k in $mesh.Knoten) {
+            if ($k.Rolle -eq 'master') { continue }
+            if ($null -eq $k.Funksprunge) {
+                & $melde 'warn' "$($k.Name) hängt nicht am Mesh" "Für diesen Repeater ist keine Verbindung zum Router erkennbar." 'mesh'
+            }
+            elseif ($k.Funksprunge -ge 2) {
+                $ueber = $k.Ueber
+                $zusatz = ''
+                if ($ueber) { $zusatz = " Der Weg läuft über $ueber." }
+                & $melde 'warn' "$($k.Name) hängt in zweiter Reihe" "Zwischen diesem Repeater und dem Router liegen $($k.Funksprunge) Funkstrecken.$zusatz Alles, was hier angeschlossen ist, geht dreimal durch die Luft — jeder Sprung kostet grob die Hälfte der Geschwindigkeit. Ein Netzwerkkabel zum Router oder ein besserer Standort löst das." 'mesh'
+            }
+        }
+
+        foreach ($ziel in $besteJeKnoten.Keys) {
+            $max = $besteJeKnoten[$ziel]
+            if ($max -lt $Konfig.MeshFunkKnapp) {
+                & $melde 'warn' "Schwache Mesh-Strecke: $ziel" "Beste Funkstrecke zum Router: $max Mbit/s. Alles, was über diesen Repeater läuft, geht zweimal durch die Luft — einmal zum Gerät, einmal zum Router." 'mesh'
             }
         }
     }
@@ -356,7 +451,7 @@ function Get-AnsichtOptimierung {
     [pscustomobject]@{
         Zeit        = (Get-Date).ToString('HH:mm:ss')
         Airtime     = Get-AirtimeAnalyse -FunkClients $funk -Geraete $hosts
-        Vorschlaege = Get-Optimierungsvorschlaege -FunkClients $funk -Geraete $hosts -Mesh $meshOk
+        Vorschlaege = Get-Optimierungsvorschlaege -FunkClients $funk -Geraete $hosts -Mesh $meshOk -Netze (OhneFehler (Hole 'wlan'))
     }
 }
 

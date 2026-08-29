@@ -315,7 +315,8 @@ function Get-Optimierungsvorschlaege {
         [Parameter(Mandatory)] $FunkClients,
         $Geraete,
         $Mesh,
-        [int] $Hoechstens = 6
+        $Netze,
+        [int] $Hoechstens = 8
     )
 
     $vorschlaege = @()
@@ -397,12 +398,56 @@ function Get-Optimierungsvorschlaege {
         }
     }
 
+    # 4. Kanalwahl. Diese Punkte findet die Sendezeit-Rechnung nicht - sie kostet
+    #    keine Bandbreite, sondern verursacht Abbrueche und Stoerungen.
+    foreach ($n in @($Netze)) {
+        if (-not $n.An) { continue }
+        $kanal = 0
+        if ($n.Kanal) { $kanal = [int]$n.Kanal }
+        if ($kanal -le 0) { continue }
+
+        if ($n.Band -match '2,4|2\.4') {
+            if ($kanal -ne 1 -and $kanal -ne 6 -and $kanal -ne 11) {
+                $vorschlaege += [pscustomobject]@{
+                    Art   = 'kanal'; MAC = ''; Ziel = ''; Band = $n.Band; Index = $n.Index
+                    Titel = "2,4-GHz-Netz von Kanal $kanal auf 1, 6 oder 11 legen"
+                    Text  = "Im 2,4-GHz-Band überlappen benachbarte Kanäle. Nur 1, 6 und 11 stören einander nicht. Auf Kanal $kanal funkt das Netz in die Bereiche von zwei Nachbarkanälen hinein — und deren Sender in deinen."
+                    Gewinn = 12; GewinnMbit = 0
+                }
+            }
+        }
+        elseif ($kanal -ge 52 -and $kanal -le 144) {
+            $vorschlaege += [pscustomobject]@{
+                Art   = 'kanal'; MAC = ''; Ziel = ''; Band = $n.Band; Index = $n.Index
+                Titel = "$($n.Band)-Netz von Kanal $kanal auf 36 bis 48 legen"
+                Text  = "Kanal $kanal liegt im Bereich, den auch Wetterradare nutzen. Erkennt die Box ein Radarsignal, muss sie den Kanal sofort verlassen — die Verbindung reißt für ein bis zwei Minuten ab, für alle gleichzeitig. Die Kanäle 36 bis 48 sind davon frei."
+                Gewinn = 20; GewinnMbit = 0
+            }
+        }
+    }
+
+    # 5. Ueberfuellte Baender. Wenn die Last sich gleichmaessig verteilt, findet
+    #    die Suche nach einzelnen Bremsern nichts - das Band ist trotzdem voll.
+    $lage = Get-AirtimeAnalyse -FunkClients $clients -Geraete $Geraete
+    foreach ($b in $lage) {
+        if ($b.Anzahl -lt 6) { continue }
+        if ($b.ProGeraetMbit -ge 25) { continue }
+        $langsame = @($b.Geraete | Where-Object { $_.Rate -lt 100 })
+        if ($langsame.Count -lt 2) { continue }
+        $vorschlaege += [pscustomobject]@{
+            Art   = 'auslastung'; MAC = ''; Ziel = ''; Band = $b.Band; Index = 0
+            Titel = "$($b.Band): $($b.Anzahl) Geräte teilen sich das Band"
+            Text  = "Im Mittel bleiben je Gerät nur $($b.ProGeraetMbit) Mbit/s. $($langsame.Count) davon handeln unter 100 Mbit/s aus und belegen dadurch überproportional viel Sendezeit. Alles, was fest steht und ein Kabel bekommen kann — Drucker, Fernseher, Spielkonsole —, entlastet hier am meisten."
+            Gewinn = 10; GewinnMbit = 0
+        }
+    }
+
     # Doppelte Vorschlaege zum selben Geraet: nur den wirksamsten behalten
     $gesehen = @{}
     $sortiert = $vorschlaege | Sort-Object Gewinn -Descending
     $ergebnis = @()
     foreach ($v in $sortiert) {
-        $s = (Txt $v.MAC) + '|' + $v.Art
+        $s = (Txt $v.MAC) + '|' + $v.Art + '|' + (Txt $v.Band)
         if ($gesehen[$s]) { continue }
         $gesehen[$s] = $true
         $ergebnis += $v

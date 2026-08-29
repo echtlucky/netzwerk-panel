@@ -14,12 +14,24 @@ function Get-HardwareDaten {
 
 # Erkennt anhand des Modellnamens, ob ein Geraet in der Datenbank veraltet ist,
 # und liefert den vorgesehenen Nachfolger.
+# Modellnamen vergleichbar machen. Die Box meldet "FRITZ!WLAN Repeater 1750E",
+# im Handel und in der Datenbank heisst dasselbe Geraet "FRITZ!Repeater 1750E".
+# Ohne Normalisierung findet kein Vergleich die beiden zusammen.
+function ConvertTo-Modellschluessel {
+    param([string]$Name)
+    if (-not $Name) { return '' }
+    (($Name -replace '[^a-zA-Z0-9]', '') -replace '(?i)wlan', '').ToLower()
+}
+
 # Sucht das Geraet selbst in der Datenbank, um seinen Stand zu beurteilen.
 function Get-GeraetInDb {
     param([string]$Modell, $Daten)
     if (-not $Modell) { return $null }
+    $suche = ConvertTo-Modellschluessel -Name $Modell
     foreach ($g in $Daten.geraete) {
-        if ($Modell -like "*$($g.name)*" -or $g.name -like "*$Modell*") { return $g }
+        $kandidat = ConvertTo-Modellschluessel -Name $g.name
+        if (-not $kandidat) { continue }
+        if ($suche -eq $kandidat -or $suche -like "*$kandidat*" -or $kandidat -like "*$suche*") { return $g }
     }
     $null
 }
@@ -27,9 +39,12 @@ function Get-GeraetInDb {
 function Get-Nachfolger {
     param([string]$Modell, $Daten)
     if (-not $Modell) { return $null }
+    $suche = ConvertTo-Modellschluessel -Name $Modell
     foreach ($g in $Daten.geraete) {
         foreach ($alt in @($g.ersetzt)) {
-            if ($alt -and $Modell -like "*$alt*") { return $g }
+            if (-not $alt) { continue }
+            $k = ConvertTo-Modellschluessel -Name $alt
+            if ($k -and ($suche -eq $k -or $suche -like "*$k*")) { return $g }
         }
     }
     $null
@@ -124,16 +139,32 @@ function Get-HardwareEmpfehlungen {
     }
 
     # ------------------------------------- 3. Repeater mit Funk-Anbindung
+    # Ein Repeater kann ueber mehrere Baender gleichzeitig angebunden sein.
+    # Bewertet wird seine beste Strecke, sonst stuende er mehrfach in der Liste.
+    $besteStrecke = @{}
     foreach ($v in @($Mesh.Verbindungen)) {
         if ($v.Art -ne 'WLAN') { continue }
         $rate = [Math]::Max($v.MaxRx, $v.MaxTx)
+        if ($rate -le 0) { continue }
+        foreach ($ziel in @($v.Von, $v.Nach)) {
+            $istRepeater = $false
+            foreach ($k in @($Mesh.Knoten)) {
+                if ($k.Name -eq $ziel -and $k.Rolle -ne 'master') { $istRepeater = $true }
+            }
+            if (-not $istRepeater) { continue }
+            if (-not $besteStrecke.ContainsKey($ziel) -or $besteStrecke[$ziel] -lt $rate) {
+                $besteStrecke[$ziel] = $rate
+            }
+        }
+    }
+    foreach ($ziel in $besteStrecke.Keys) {
+        $rate = $besteStrecke[$ziel]
         if ($rate -ge 700) { continue }
-
         $g = & $finde 'rep-6000'
         $vorschlaege += [pscustomobject]@{
             Rang    = 3
-            Anlass  = "Schwache Funkstrecke zu $($v.Nach)"
-            Grund   = "Der Repeater hängt mit $rate Mbit/s per Funk am Router. Diese Strecke teilt sich die Sendezeit mit allen Geräten, die über ihn laufen — jedes Datenpaket geht zweimal durch die Luft."
+            Anlass  = "Schwache Funkstrecke zu $ziel"
+            Grund   = "Die beste Funkstrecke dieses Repeaters liegt bei $rate Mbit/s. Sie teilt sich die Sendezeit mit allen Geräten, die über ihn laufen — jedes Datenpaket geht zweimal durch die Luft, einmal zum Gerät und einmal weiter zum Router."
             Wirkung = 'Ein Netzwerkkabel zum Router löst das vollständig und kostet nichts außer dem Kabel. Geht das nicht, hat ein Tri-Band-Gerät ein eigenes Funkmodul nur für diese Strecke.'
             Geraet  = $g
         }
