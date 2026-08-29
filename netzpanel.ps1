@@ -144,14 +144,43 @@ function Invoke-Einrichten {
         Write-Host ""
     }
     catch {
+        $meldung = $_.Exception.Message
         Write-Host ""
-        Write-Host "  Fehlgeschlagen: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "  Fehlgeschlagen: $meldung" -ForegroundColor Red
         Write-Host ""
-        Write-Host "  Häufigste Ursachen:" -ForegroundColor Yellow
-        Write-Host "    1. 'Zugriff für Anwendungen zulassen' ist in der Box nicht gesetzt"
-        Write-Host "    2. Dem Benutzer fehlt die Berechtigung 'FRITZ!Box Einstellungen'"
-        Write-Host "    3. Benutzername oder Passwort stimmen nicht"
-        Write-Host "    4. Die Box ist unter '$adresse' nicht erreichbar"
+
+        if ($meldung -match 'Anmeldung abgelehnt') {
+            if ($benutzer -eq $script:OhneBenutzer) {
+                Write-Host "  Deine Box verlangt einen Benutzernamen." -ForegroundColor Yellow
+                Write-Host ""
+                Write-Host "  Die Weboberfläche lässt dich mit reinem Kennwort herein," -ForegroundColor DarkGray
+                Write-Host "  TR-064 verlangt zusätzlich einen Benutzernamen." -ForegroundColor DarkGray
+                Write-Host ""
+                Write-Host "  Wo du ihn findest:" -ForegroundColor Yellow
+                Write-Host "    In der Box unter  System -> FRITZ!Box-Benutzer"
+                Write-Host "    Dort steht mindestens ein Eintrag, oft 'fritz' plus vier Ziffern."
+                Write-Host "    Bei ihm muss 'FRITZ!Box Einstellungen' angehakt sein."
+            } else {
+                Write-Host "  Benutzername oder Kennwort passen nicht." -ForegroundColor Yellow
+                Write-Host ""
+                Write-Host "  Prüfe in der Box unter  System -> FRITZ!Box-Benutzer:" -ForegroundColor DarkGray
+                Write-Host "    - heißt der Benutzer wirklich '$benutzer'?" -ForegroundColor DarkGray
+                Write-Host "    - ist bei ihm 'FRITZ!Box Einstellungen' angehakt?" -ForegroundColor DarkGray
+                Write-Host "    - hat er überhaupt ein eigenes Kennwort?" -ForegroundColor DarkGray
+            }
+            Write-Host ""
+            Write-Host "  Achtung: Nach mehreren Fehlversuchen sperrt die Box die Anmeldung" -ForegroundColor DarkYellow
+            Write-Host "  für einige Sekunden. Dann kurz warten." -ForegroundColor DarkYellow
+            Write-Host ""
+            $nochmal = Read-Host "  Gleich noch einmal versuchen? (j/n)"
+            if ($nochmal -eq 'j') { Invoke-Einrichten; return }
+        }
+        else {
+            Write-Host "  Häufigste Ursachen:" -ForegroundColor Yellow
+            Write-Host "    1. 'Zugriff für Anwendungen zulassen' ist in der Box nicht gesetzt"
+            Write-Host "    2. Dem Benutzer fehlt die Berechtigung 'FRITZ!Box Einstellungen'"
+            Write-Host "    3. Die Box ist unter '$adresse' nicht erreichbar"
+        }
         Write-Host ""
     }
 }
