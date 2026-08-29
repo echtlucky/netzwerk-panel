@@ -58,15 +58,36 @@ anderen Rechner ist die Datei wertlos.
 ## Benutzen
 
 ```powershell
-.\netzpanel.ps1 start     # Panel starten und im Browser öffnen
-.\netzpanel.ps1 demo      # Oberfläche mit Beispieldaten ansehen
-.\netzpanel.ps1 status    # Verbindung und alle Datenquellen prüfen
-.\netzpanel.ps1 einrichten
-.\netzpanel.ps1 zuruecksetzen
+.
+etzpanel.ps1 start     # Panel starten und im Browser öffnen
+.
+etzpanel.ps1 demo      # Oberfläche mit Beispieldaten ansehen
+.
+etzpanel.ps1 status    # Verbindung und alle Datenquellen prüfen
+.
+etzpanel.ps1 einrichten
+.
+etzpanel.ps1 zuruecksetzen
 ```
 
 Zusätze: `-Port 8089` für einen anderen Port, `-KeinBrowser` zum Unterdrücken
 des Browserstarts.
+
+### Im Hintergrund mitlaufen lassen
+
+```powershell
+.
+etzpanel.ps1 autostart
+```
+
+Danach läuft das Panel ab dem nächsten Anmelden von selbst — **ohne Fenster,
+ohne Browser, ohne Eintrag in der Taskleiste**. Erreichbar bleibt es unter
+`http://127.0.0.1:8088`; ein Lesezeichen genügt.
+
+Umgesetzt über die Aufgabenplanung von Windows und einen Windows-Script-Host-
+Aufruf: Der Autostart-Ordner oder `-WindowStyle Hidden` würden beim Start ein
+Konsolenfenster aufblitzen lassen. Entfernen mit `.
+etzpanel.ps1 autostart-aus`.
 
 ## Was das Panel kann
 

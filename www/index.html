@@ -1517,7 +1517,25 @@ async function einstellungenSpeichern(){
 /* ========================================================= ÄNDERUNGEN */
 /* Ein Weg für alle Änderungen an der Box. Riskante verlangen, dass ein Wort
    getippt wird — ein Klick allein soll das Funknetz nicht abschalten können. */
+/* Klartext für Änderungen ohne eigene Rückfrage — es soll nie etwas ohne
+   Bestätigung an der Box geschehen. */
+const AENDERUNGSTEXT={
+  upnp:'Selbstständige Portfreigaben umschalten?',
+  fernzugriff:'Fernzugriff aus dem Internet umschalten?',
+  wlan:'Funknetz umschalten?',
+  wlanname:'Netzname ändern? Alle Geräte müssen sich danach neu verbinden.',
+  wlanschluessel:'WLAN-Schlüssel ändern? Alle Geräte müssen sich neu anmelden.',
+  wlankanal:'Funkkanal ändern? Das Netz wird dabei für einige Sekunden unterbrochen.',
+  wlansichtbar:'Sichtbarkeit des Netznamens umschalten?',
+  portfreigabe:'Portfreigabe entfernen?',
+  neustart:'FRITZ!Box neu starten?'
+};
+
 async function aendern(was,daten,frage,tippen){
+  // Ohne übergebene Frage greift der Standardtext. Stillschweigend wird nichts
+  // an der Box verändert.
+  if(!frage&&!tippen) frage=AENDERUNGSTEXT[was]||'Diese Einstellung an der FRITZ!Box ändern?';
+
   if(tippen){
     const ein=prompt(frage+'\n\nZum Bestätigen »'+tippen+'« eingeben:');
     if(ein===null) return false;
@@ -1532,6 +1550,9 @@ async function aendern(was,daten,frage,tippen){
       body:JSON.stringify(Object.assign({was:was},daten||{}))});
     const d=await r.json();
     if(d.fehler){ alert('Fehlgeschlagen:\n\n'+d.fehler); return false; }
+    // Die Box nimmt manche Vorgaben an, ohne sie umzusetzen. Das Panel meldet
+    // solche Fälle als Hinweis, nicht als Erfolg.
+    if(d.ok===false){ melden(d.text||'Die Box hat die Änderung nicht übernommen.','warn'); return false; }
     if(d.text) melden(d.text);
     setTimeout(frisch,1200);
     return true;
@@ -1539,7 +1560,7 @@ async function aendern(was,daten,frage,tippen){
 }
 
 /* Kurze Rückmeldung am oberen Rand statt eines Meldungsfensters. */
-function melden(text){
+function melden(text,art){
   let el=document.getElementById('meldung');
   if(!el){
     el=document.createElement('div');
@@ -1550,10 +1571,13 @@ function melden(text){
       'line-height:1.5;transition:opacity .3s';
     document.body.appendChild(el);
   }
+  const warn = art==='warn';
+  el.style.background = warn ? 'var(--krit-w)' : 'var(--pos-w)';
+  el.style.borderLeftColor = warn ? 'var(--krit)' : 'var(--pos)';
   el.textContent=text;
   el.style.opacity='1';
   clearTimeout(el._t);
-  el._t=setTimeout(()=>{ el.style.opacity='0'; },6000);
+  el._t=setTimeout(()=>{ el.style.opacity='0'; }, warn?14000:6000);
 }
 
 /* Wert bearbeiten: zeigt ein Eingabefeld mit dem jetzigen Wert. */

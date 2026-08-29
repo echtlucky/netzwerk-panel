@@ -618,12 +618,36 @@ function Invoke-Aenderung {
         }
 
         'wlankanal' {
-            Set-FritzWlanKanal -Index ([int]$Daten.index) -Kanal ([int]$Daten.wert) -Credential $c
+            $index = [int]$Daten.index
+            $ziel  = [int]$Daten.wert
+            Set-FritzWlanKanal -Index $index -Kanal $ziel -Credential $c
             Leere-Cache @('wlan','funk')
-            $k = [int]$Daten.wert
-            $t = if ($k -eq 0) { 'Kanalwahl der Box überlassen.' } else { "Kanal $k gesetzt." }
-            return [pscustomobject]@{ ok = $true; text = "$t Das Funknetz wird dabei kurz unterbrochen." }
-        }
+
+            if ($ziel -eq 0) {
+                return [pscustomobject]@{ ok = $true; text = 'Kanalwahl wieder der Box überlassen.' }
+            }
+
+            # Nachsehen, ob die Box den Kanal wirklich uebernommen hat. Ist die
+            # automatische Kanalwahl aktiv, nimmt sie den Befehl an und setzt
+            # ihn sofort wieder zurueck - ohne einen Fehler zu melden.
+            Start-Sleep -Seconds 4
+            $jetzt = 0
+            try {
+                $netze = Get-FritzWlan -Credential $c
+                foreach ($n in $netze) { if ($n.Index -eq $index) { $jetzt = [int]$n.Kanal } }
+            } catch { }
+
+            if ($jetzt -eq $ziel) {
+                return [pscustomobject]@{ ok = $true
+                    text = "Kanal $ziel gesetzt. Das Funknetz war dabei kurz unterbrochen." }
+            }
+
+            $hinweis = 'Die Box hat Kanal ' + $ziel + ' angenommen, funkt aber weiter auf ' + $jetzt +
+                       '. Das heisst: die automatische Kanalwahl ist aktiv und ueberschreibt jede ' +
+                       'Vorgabe. Abschalten laesst sie sich nur in der Weboberflaeche der Box: ' +
+                       'WLAN, dann Funkkanal, dann Funkkanal-Einstellungen anpassen und den Kanal ' +
+                       'manuell festlegen.'
+            return [pscustomobject]@{ ok = $false; text = $hinweis }        }
 
         'wlansichtbar' {
             Set-FritzWlanSichtbar -Index ([int]$Daten.index) -Sichtbar ([bool]$Daten.an) -Credential $c

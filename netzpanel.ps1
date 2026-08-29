@@ -10,7 +10,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('start', 'demo', 'einrichten', 'status', 'zuruecksetzen', 'hilfe')]
+    [ValidateSet('start', 'demo', 'einrichten', 'status', 'zuruecksetzen', 'hilfe', 'autostart', 'autostart-aus')]
     [string] $Befehl = 'start',
 
     [int]    $Port,
@@ -42,6 +42,8 @@ function Show-Hilfe {
     Write-Host "    demo            Oberfläche mit Beispieldaten ansehen"
     Write-Host "    status          Verbindung und Einstellungen prüfen"
     Write-Host "    zuruecksetzen   Zugangsdaten und Einstellungen löschen"
+    Write-Host "    autostart       beim Anmelden unsichtbar mitstarten"
+    Write-Host "    autostart-aus   diesen Autostart wieder entfernen"
     Write-Host ""
     Write-Host "  Zusätze" -ForegroundColor Yellow
     Write-Host "    -Port 8089      anderen Port verwenden"
@@ -247,12 +249,86 @@ function Invoke-Zuruecksetzen {
     Write-Host "  Gelöscht.`n" -ForegroundColor Green
 }
 
+# ------------------------------------------------------------- Autostart
+#
+# Das Panel soll beim Anmelden von selbst laufen: ohne Fenster, ohne Browser,
+# ohne Eintrag in der Taskleiste. Erreichbar bleibt es unter der bekannten
+# Adresse. Umgesetzt ueber die Aufgabenplanung von Windows - der Autostart-
+# Ordner wuerde ein Konsolenfenster aufblitzen lassen.
+
+$script:AufgabenName = 'Netzwerk-Panel'
+
+function Invoke-Autostart {
+    Show-Kopf
+    $vbs = Join-Path $PSScriptRoot 'netzpanel-still.vbs'
+    if (-not (Test-Path $vbs)) { Write-Host "  netzpanel-still.vbs fehlt.`n" -ForegroundColor Red; return }
+
+    $vorhanden = Get-ScheduledTask -TaskName $script:AufgabenName -ErrorAction SilentlyContinue
+    if ($vorhanden) {
+        Write-Host "  Der Autostart ist bereits eingerichtet." -ForegroundColor DarkGray
+        $a = Read-Host "  Neu anlegen? (j/n)"
+        if ($a -ne 'j') { Write-Host "" ; return }
+        Unregister-ScheduledTask -TaskName $script:AufgabenName -Confirm:$false
+    }
+
+    try {
+        $aktion  = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument ('"' + $vbs + '"')
+        $ausloes = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+        # Startverzoegerung: erst wenn das Netzwerk steht, ist die Box erreichbar
+        $ausloes.Delay = 'PT30S'
+        $einst   = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
+                        -DontStopIfGoingOnBatteries -StartWhenAvailable `
+                        -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
+        $haupt   = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive
+
+        Register-ScheduledTask -TaskName $script:AufgabenName -Action $aktion -Trigger $ausloes `
+            -Settings $einst -Principal $haupt `
+            -Description 'Startet das Netzwerk-Panel unsichtbar im Hintergrund.' | Out-Null
+
+        $konfig = Get-Konfig
+        Write-Host "  Eingerichtet." -ForegroundColor Green
+        Write-Host ""
+        Write-Host "  Ab dem nächsten Anmelden läuft das Panel von selbst:"
+        Write-Host "    ohne Fenster, ohne Browser, ohne Eintrag in der Taskleiste"
+        Write-Host ""
+        Write-Host "  Erreichbar unter:" -ForegroundColor Yellow
+        Write-Host "    http://127.0.0.1:$($konfig.PanelPort)" -ForegroundColor Cyan
+        Write-Host ""
+        Write-Host "  Jetzt sofort starten, ohne neu anzumelden:" -ForegroundColor DarkGray
+        Write-Host "    Start-ScheduledTask -TaskName '$($script:AufgabenName)'" -ForegroundColor DarkGray
+        Write-Host ""
+        Write-Host "  Wieder entfernen:  .\netzpanel.ps1 autostart-aus" -ForegroundColor DarkGray
+        Write-Host ""
+    }
+    catch {
+        Write-Host "  Fehlgeschlagen: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host ""
+        Write-Host "  Die Aufgabenplanung braucht dafür meist erhöhte Rechte." -ForegroundColor Yellow
+        Write-Host "  PowerShell als Administrator öffnen und den Befehl wiederholen." -ForegroundColor Yellow
+        Write-Host ""
+    }
+}
+
+function Invoke-AutostartAus {
+    Show-Kopf
+    $vorhanden = Get-ScheduledTask -TaskName $script:AufgabenName -ErrorAction SilentlyContinue
+    if (-not $vorhanden) { Write-Host "  Es ist kein Autostart eingerichtet.`n" -ForegroundColor DarkGray; return }
+    try {
+        Unregister-ScheduledTask -TaskName $script:AufgabenName -Confirm:$false
+        Write-Host "  Autostart entfernt." -ForegroundColor Green
+        Write-Host "  Ein bereits laufendes Panel läuft weiter, bis der PC neu startet.`n" -ForegroundColor DarkGray
+    }
+    catch { Write-Host "  Fehlgeschlagen: $($_.Exception.Message)`n" -ForegroundColor Red }
+}
+
 # ------------------------------------------------------------------ Start
 switch ($Befehl) {
     'einrichten'    { Invoke-Einrichten }
     'status'        { Invoke-Status }
     'zuruecksetzen' { Invoke-Zuruecksetzen }
     'hilfe'         { Show-Hilfe }
+    'autostart'     { Invoke-Autostart }
+    'autostart-aus' { Invoke-AutostartAus }
     'demo'          { Start-Panel -Port $Port -Demo -KeinBrowser:$KeinBrowser }
     default         { Start-Panel -Port $Port -KeinBrowser:$KeinBrowser }
 }
