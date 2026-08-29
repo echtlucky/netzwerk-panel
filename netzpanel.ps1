@@ -85,6 +85,11 @@ function Invoke-Einrichten {
     $benutzer = Read-Host "  Benutzername"
     Write-Host "  Passwort (wird nicht angezeigt)" -NoNewline
     $pw = Read-Host -AsSecureString
+
+    # PSCredential laesst keinen leeren Benutzernamen zu. TR-064 dagegen schon -
+    # bei einer Box, die nur ein Kennwort kennt, ist er tatsaechlich leer.
+    # Deshalb ein Platzhalter, den der Client vor dem Anmelden wieder entfernt.
+    if (-not $benutzer) { $benutzer = $script:OhneBenutzer }
     $cred = New-Object System.Management.Automation.PSCredential($benutzer, $pw)
 
     # Verschluesselte Verbindung bevorzugen und den Fingerabdruck merken

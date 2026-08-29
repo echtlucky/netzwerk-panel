@@ -6,6 +6,10 @@
 # einzeln ab, damit ein Dienst, den die Box nicht anbietet, nie das ganze
 # Panel lahmlegt.
 
+# Platzhalter fuer "kein Benutzername". PSCredential verlangt einen nicht leeren
+# Namen, TR-064 kommt bei manchen Boxen aber ohne aus.
+$script:OhneBenutzer = '(ohne Benutzernamen)'
+
 # Adresse und Port kommen aus den Einstellungen (siehe konfig.ps1).
 $script:FritzHost    = 'fritz.box'
 $script:FritzPort    = 49000
@@ -127,8 +131,13 @@ function Invoke-Tr064 {
     $req.Timeout     = $TimeoutMs
 
     # Digest-Authentifizierung: das Passwort geht als Hash ueber die Leitung, nie im Klartext.
+    $netz = $Credential.GetNetworkCredential()
+    $benutzername = $netz.UserName
+    if ($benutzername -eq $script:OhneBenutzer) { $benutzername = '' }
+
     $cache = New-Object System.Net.CredentialCache
-    $cache.Add((New-Object Uri($uri)), 'Digest', $Credential.GetNetworkCredential())
+    $cache.Add((New-Object Uri($uri)), 'Digest',
+               (New-Object System.Net.NetworkCredential($benutzername, $netz.Password)))
     $req.Credentials     = $cache
     $req.PreAuthenticate = $true
 
