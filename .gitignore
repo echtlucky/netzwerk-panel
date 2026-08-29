@@ -1,0 +1,18 @@
+# Zugangsdaten und Einstellungen liegen unter %APPDATA%\netzpanel und damit
+# ohnehin außerhalb dieses Ordners. Die folgenden Muster sind eine zweite
+# Sicherung, falls jemand sie doch hier ablegt.
+zugang.xml
+.cred.xml
+*.cred.xml
+config.json
+
+# Messprotokolle enthalten Adressen aus dem eigenen Netz
+netzcheck.csv
+*.log
+
+# Windows / Editoren
+Thumbs.db
+desktop.ini
+.vs/
+.vscode/
+*.user
