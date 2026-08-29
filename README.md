@@ -10,13 +10,20 @@ im eigenen Netz.
 
 ## Installieren
 
-In PowerShell:
+Das Repository ist derzeit **privat**. Solange es das ist, führt der Weg über die
+GitHub CLI:
 
 ```powershell
-iwr -useb https://raw.githubusercontent.com/BENUTZER/netzwerk-panel/main/install.ps1 | iex
+gh repo clone echtlucky/netzwerk-panel "$env:LOCALAPPDATA\netzpanel"
 ```
 
-Installiert nach `%LOCALAPPDATA%\netzpanel`. Keine Administratorrechte nötig,
+Sobald es öffentlich ist, genügt ein Einzeiler in PowerShell:
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/echtlucky/netzwerk-panel/main/install.ps1 | iex
+```
+
+Beides installiert nach `%LOCALAPPDATA%\netzpanel`. Keine Administratorrechte nötig,
 nichts wird an Windows verändert. Deinstallieren heißt: den Ordner löschen.
 
 Alternativ das Repository herunterladen und `netzpanel.ps1` direkt aufrufen.

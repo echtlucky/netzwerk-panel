@@ -1,14 +1,17 @@
-# install.ps1
+﻿# install.ps1
 # Installiert das Netzwerk-Panel nach %LOCALAPPDATA%\netzpanel.
 #
 # Aufruf in PowerShell:
-#   iwr -useb https://raw.githubusercontent.com/BENUTZER/netzwerk-panel/main/install.ps1 | iex
+#   iwr -useb https://raw.githubusercontent.com/echtlucky/netzwerk-panel/main/install.ps1 | iex
+#
+# Solange das Repository privat ist, funktioniert dieser Einzeiler nur mit
+# angemeldeter GitHub CLI. Der Weg dafür steht in der README unter "Installieren".
 #
 # Es werden keine Administratorrechte gebraucht und nichts an Windows verändert.
 # Deinstallieren heißt: den Ordner löschen.
 
 param(
-    [string] $Repo   = 'BENUTZER/netzwerk-panel',
+    [string] $Repo   = 'echtlucky/netzwerk-panel',
     [string] $Zweig  = 'main',
     [string] $Ziel   = (Join-Path $env:LOCALAPPDATA 'netzpanel')
 )
