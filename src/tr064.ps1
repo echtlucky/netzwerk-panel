@@ -7,15 +7,83 @@
 # Panel lahmlegt.
 
 # Adresse und Port kommen aus den Einstellungen (siehe konfig.ps1).
-$script:FritzHost = 'fritz.box'
-$script:FritzPort = 49000
+$script:FritzHost    = 'fritz.box'
+$script:FritzPort    = 49000
+$script:FritzTls     = $false
+$script:FritzTlsPort = 49443
+$script:FritzFinger  = ''      # erwarteter Zertifikat-Fingerabdruck
 
 function Set-FritzVerbindung {
-    param([string]$Adresse, [int]$Port)
-    if ($Adresse) { $script:FritzHost = $Adresse }
-    if ($Port)    { $script:FritzPort = $Port }
+    param([string]$Adresse, [int]$Port, [bool]$Tls, [int]$TlsPort, [string]$Fingerabdruck)
+    if ($Adresse)       { $script:FritzHost    = $Adresse }
+    if ($Port)          { $script:FritzPort    = $Port }
+    if ($TlsPort)       { $script:FritzTlsPort = $TlsPort }
+    if ($PSBoundParameters.ContainsKey('Tls')) { $script:FritzTls = $Tls }
+    if ($null -ne $Fingerabdruck) { $script:FritzFinger = $Fingerabdruck }
 }
 function Get-FritzHostAdresse { $script:FritzHost }
+function Get-FritzTlsAktiv    { $script:FritzTls }
+
+# ------------------------------------------------------------ Verschluesselung
+#
+# Die FRITZ!Box bietet TR-064 auch ueber TLS an (Port 49443). Ohne TLS gingen
+# Anmeldung und uebertragene Werte - etwa ein neuer WLAN-Schluessel - im
+# Klartext durch das eigene Netz.
+#
+# Das Zertifikat der Box ist selbst ausgestellt und deshalb nicht ueber eine
+# Zertifizierungsstelle pruefbar. Statt die Pruefung einfach abzuschalten,
+# merkt sich das Panel bei der Einrichtung den Fingerabdruck und vergleicht ihn
+# bei jeder Verbindung - dasselbe Verfahren, das SSH beim ersten Verbinden nutzt.
+# Aendert er sich, wird die Verbindung abgelehnt: entweder wurde die Box
+# zurueckgesetzt, oder es antwortet nicht mehr die Box.
+
+$script:LetzterFinger = ''
+
+function Initialize-FritzTlsPruefung {
+    [System.Net.ServicePointManager]::SecurityProtocol =
+        [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls11
+
+    [System.Net.ServicePointManager]::ServerCertificateValidationCallback = {
+        param($absender, $zertifikat, $kette, $fehler)
+        if (-not $zertifikat) { return $false }
+        $finger = $zertifikat.GetCertHashString()
+        $script:LetzterFinger = $finger
+        # Ohne hinterlegten Fingerabdruck wird der erste akzeptiert und gemerkt.
+        if (-not $script:FritzFinger) { return $true }
+        return ($finger -eq $script:FritzFinger)
+    }
+}
+
+function Get-FritzZertifikatFingerabdruck {
+    param([string]$Adresse, [int]$Port = 49443)
+    if (-not $Adresse) { $Adresse = $script:FritzHost }
+
+    $alterCallback = [System.Net.ServicePointManager]::ServerCertificateValidationCallback
+    $gemerkt = ''
+    try {
+        [System.Net.ServicePointManager]::SecurityProtocol =
+            [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls11
+        [System.Net.ServicePointManager]::ServerCertificateValidationCallback = {
+            param($a, $z, $k, $f)
+            if ($z) { $script:LetzterFinger = $z.GetCertHashString() }
+            return $true
+        }
+        $req = [System.Net.HttpWebRequest]::Create("https://${Adresse}:$Port/tr64desc.xml")
+        $req.Timeout = 8000
+        $res = $req.GetResponse()
+        $res.Close()
+        $gemerkt = $script:LetzterFinger
+    }
+    catch { throw "TLS-Verbindung zu ${Adresse}:$Port fehlgeschlagen: $($_.Exception.Message)" }
+    finally { [System.Net.ServicePointManager]::ServerCertificateValidationCallback = $alterCallback }
+    $gemerkt
+}
+
+# Baut die Basisadresse - je nach Einstellung verschluesselt oder nicht.
+function Get-FritzBasis {
+    if ($script:FritzTls) { return "https://$($script:FritzHost):$($script:FritzTlsPort)" }
+    "http://$($script:FritzHost):$($script:FritzPort)"
+}
 
 # Wird von konfig.ps1 bereitgestellt. Der Umweg ueber eine eigene Funktion
 # haelt den TR-064-Client unabhaengig davon, woher die Zugangsdaten stammen.
@@ -27,7 +95,7 @@ function Invoke-Tr064 {
         [Parameter(Mandatory)][string] $Control,
         [Parameter(Mandatory)][string] $Service,
         [Parameter(Mandatory)][string] $Action,
-        [hashtable] $Arguments = @{},
+        [System.Collections.IDictionary] $Arguments = @{},
         [System.Management.Automation.PSCredential] $Credential,
         [string] $TargetHost,
         [int]    $TimeoutMs = 12000
@@ -48,7 +116,9 @@ function Invoke-Tr064 {
             "<u:$Action xmlns:u=`"$Service`">$argXml</u:$Action>" +
             '</s:Body></s:Envelope>'
 
-    $uri = "http://${TargetHost}:$($script:FritzPort)$Control"
+    $basis = Get-FritzBasis
+    if ($TargetHost -ne $script:FritzHost) { $basis = "http://${TargetHost}:$($script:FritzPort)" }
+    $uri = "$basis$Control"
 
     $req = [System.Net.HttpWebRequest]::Create($uri)
     $req.Method      = 'POST'
@@ -109,7 +179,9 @@ function Get-FritzDatei {
     $wc = New-Object System.Net.WebClient
     $wc.Encoding = [System.Text.Encoding]::UTF8
     if ($Pfad -match '^https?://') { return $wc.DownloadString($Pfad) }
-    $wc.DownloadString("http://${TargetHost}:$($script:FritzPort)$Pfad")
+    $basis = Get-FritzBasis
+    if ($TargetHost -ne $script:FritzHost) { $basis = "http://${TargetHost}:$($script:FritzPort)" }
+    $wc.DownloadString("$basis$Pfad")
 }
 
 # ===================================================================== BASIS
@@ -654,4 +726,135 @@ function Invoke-FritzNeuverbinden {
         } catch { }
     }
     throw 'Neuverbinden wird von dieser Box nicht angeboten.'
+}
+
+
+# ============================================================== EINSTELLUNGEN
+#
+# Alles hier veraendert die FRITZ!Box. Jede Funktion tut genau eine Sache und
+# meldet Fehler weiter, statt sie zu verschlucken - der Aufrufer entscheidet,
+# wie er damit umgeht.
+
+# Schaltet die selbststaendigen Portfreigaben ab (oder wieder an).
+# Der Medienserver wird dabei mitgesendet, weil die Box beide Werte zusammen
+# erwartet - sein aktueller Zustand wird vorher gelesen und beibehalten.
+function Set-FritzUpnp {
+    param([Parameter(Mandatory)][bool]$An, $Credential)
+
+    $ist = Invoke-Tr064 -Control '/upnp/control/x_upnp' `
+                        -Service 'urn:dslforum-org:service:X_AVM-DE_UPnP:1' `
+                        -Action 'GetInfo' -Credential $Credential
+    $medien = '0'
+    if ($ist.'NewX_AVM-DE_UPnPMediaServer' -eq '1') { $medien = '1' }
+
+    $wert = '0'; if ($An) { $wert = '1' }
+    Invoke-Tr064 -Control '/upnp/control/x_upnp' `
+                 -Service 'urn:dslforum-org:service:X_AVM-DE_UPnP:1' `
+                 -Action 'SetConfig' `
+                 -Arguments ([ordered]@{ NewEnable = $wert; NewUPnPMediaServer = $medien }) `
+                 -Credential $Credential | Out-Null
+}
+
+function Set-FritzFernzugriff {
+    param([Parameter(Mandatory)][bool]$An, $Credential)
+    $wert = '0'; if ($An) { $wert = '1' }
+    Invoke-Tr064 -Control '/upnp/control/x_remote' `
+                 -Service 'urn:dslforum-org:service:X_AVM-DE_RemoteAccess:1' `
+                 -Action 'SetEnable' -Arguments ([ordered]@{ NewEnabled = $wert }) `
+                 -Credential $Credential | Out-Null
+}
+
+function Set-FritzWlanName {
+    param(
+        [Parameter(Mandatory)][int]$Index,
+        [Parameter(Mandatory)][string]$Name,
+        $Credential
+    )
+    if ($Name.Length -lt 1 -or $Name.Length -gt 32) {
+        throw 'Ein WLAN-Name muss zwischen 1 und 32 Zeichen lang sein.'
+    }
+    Invoke-Tr064 -Control "/upnp/control/wlanconfig$Index" `
+                 -Service "urn:dslforum-org:service:WLANConfiguration:$Index" `
+                 -Action 'SetSSID' -Arguments ([ordered]@{ NewSSID = $Name }) `
+                 -Credential $Credential | Out-Null
+}
+
+# Setzt den WLAN-Schluessel. Laeuft nur ueber eine verschluesselte Verbindung -
+# sonst ginge der neue Schluessel im Klartext durch das eigene Netz.
+function Set-FritzWlanSchluessel {
+    param(
+        [Parameter(Mandatory)][int]$Index,
+        [Parameter(Mandatory)][string]$Schluessel,
+        $Credential
+    )
+    if (-not (Get-FritzTlsAktiv)) {
+        throw 'Ein WLAN-Schlüssel wird nur über eine verschlüsselte Verbindung gesetzt. In den Einstellungen „Verschlüsselte Verbindung" einschalten.'
+    }
+    if ($Schluessel.Length -lt 8 -or $Schluessel.Length -gt 63) {
+        throw 'Ein WLAN-Schlüssel muss zwischen 8 und 63 Zeichen lang sein.'
+    }
+    Invoke-Tr064 -Control "/upnp/control/wlanconfig$Index" `
+                 -Service "urn:dslforum-org:service:WLANConfiguration:$Index" `
+                 -Action 'SetSecurityKeys' `
+                 -Arguments ([ordered]@{
+                     NewWEPKey0 = ''; NewWEPKey1 = ''; NewWEPKey2 = ''; NewWEPKey3 = ''
+                     NewPreSharedKey = ''; NewKeyPassphrase = $Schluessel
+                 }) -Credential $Credential | Out-Null
+}
+
+function Set-FritzWlanKanal {
+    param(
+        [Parameter(Mandatory)][int]$Index,
+        [Parameter(Mandatory)][int]$Kanal,
+        $Credential
+    )
+    # 0 bedeutet: die Box waehlt selbst
+    Invoke-Tr064 -Control "/upnp/control/wlanconfig$Index" `
+                 -Service "urn:dslforum-org:service:WLANConfiguration:$Index" `
+                 -Action 'SetChannel' -Arguments ([ordered]@{ NewChannel = $Kanal }) `
+                 -Credential $Credential | Out-Null
+}
+
+function Set-FritzWlanSichtbar {
+    param(
+        [Parameter(Mandatory)][int]$Index,
+        [Parameter(Mandatory)][bool]$Sichtbar,
+        $Credential
+    )
+    $wert = '0'; if ($Sichtbar) { $wert = '1' }
+    Invoke-Tr064 -Control "/upnp/control/wlanconfig$Index" `
+                 -Service "urn:dslforum-org:service:WLANConfiguration:$Index" `
+                 -Action 'SetBeaconAdvertisement' `
+                 -Arguments ([ordered]@{ NewBeaconAdvertisementEnabled = $wert }) `
+                 -Credential $Credential | Out-Null
+}
+
+function Remove-FritzPortfreigabe {
+    param(
+        [Parameter(Mandatory)][string]$Protokoll,
+        [Parameter(Mandatory)][int]$AussenPort,
+        [string]$Gegenstelle = '',
+        $Credential
+    )
+    foreach ($v in @(
+        @{ c = '/upnp/control/wanpppconn1';      s = 'urn:dslforum-org:service:WANPPPConnection:1' },
+        @{ c = '/upnp/control/wanipconnection1'; s = 'urn:dslforum-org:service:WANIPConnection:1' })) {
+        try {
+            Invoke-Tr064 -Control $v.c -Service $v.s -Action 'DeletePortMapping' `
+                         -Arguments ([ordered]@{
+                             NewRemoteHost = $Gegenstelle
+                             NewExternalPort = $AussenPort
+                             NewProtocol = $Protokoll.ToUpper()
+                         }) -Credential $Credential | Out-Null
+            return
+        } catch { }
+    }
+    throw 'Die Portfreigabe konnte nicht entfernt werden.'
+}
+
+function Restart-FritzBox {
+    param($Credential)
+    Invoke-Tr064 -Control '/upnp/control/deviceconfig' `
+                 -Service 'urn:dslforum-org:service:DeviceConfig:1' `
+                 -Action 'Reboot' -Credential $Credential | Out-Null
 }

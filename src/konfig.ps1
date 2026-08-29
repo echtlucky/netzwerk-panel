@@ -16,6 +16,13 @@ $script:Standard = [ordered]@{
     BoxPort         = 49000
     PanelPort       = 8088
 
+    # Verschluesselte Verbindung zur Box (TR-064 ueber TLS).
+    # Der Fingerabdruck wird bei der Einrichtung gemerkt und danach geprueft -
+    # so wie SSH es beim ersten Verbinden macht.
+    BoxTls          = $true
+    BoxTlsPort      = 49443
+    BoxFingerabdruck = ''
+
     # Schwellwerte fuer die Bewertung. Wer andere Massstaebe anlegen
     # moechte, aendert sie in den Einstellungen des Panels.
     StoerabstandGut     = 10      # dB
@@ -67,7 +74,10 @@ function Save-Konfig {
     foreach ($s in $script:Standard.Keys) {
         $wert = $Konfig.$s
         if ($null -eq $wert) { $wert = $script:Standard[$s] }
-        if ($script:Standard[$s] -is [int]) {
+        if ($script:Standard[$s] -is [bool]) {
+            $wert = [bool]$wert
+        }
+        elseif ($script:Standard[$s] -is [int]) {
             $zahl = 0
             if ([int]::TryParse([string]$wert, [ref]$zahl)) { $wert = $zahl }
             else { $wert = $script:Standard[$s] }

@@ -483,6 +483,79 @@ function Get-AnsichtProtokoll { [pscustomobject]@{ Zeit=(Get-Date).ToString('HH:
 function Get-AnsichtTelefonie { [pscustomobject]@{ Zeit=(Get-Date).ToString('HH:mm:ss'); Anrufe = Hole 'anrufe'; Dect = Hole 'dect' } }
 function Get-AnsichtPc        { [pscustomobject]@{ Zeit=(Get-Date).ToString('HH:mm:ss'); Lokal = Hole 'lokal' } }
 
+# ========================================================== AENDERUNGEN
+#
+# Jede Aenderung an der Box laeuft hier durch. Der Rueckgabewert sagt in
+# Klartext, was geschehen ist - das Panel zeigt ihn unveraendert an.
+
+function Invoke-Aenderung {
+    param([Parameter(Mandatory)][string]$Was, $Daten)
+
+    $c = $script:Cred
+    switch ($Was) {
+
+        'upnp' {
+            Set-FritzUpnp -An ([bool]$Daten.an) -Credential $c
+            Leere-Cache @('sicher')
+            $z = if ($Daten.an) { 'eingeschaltet' } else { 'abgeschaltet' }
+            return [pscustomobject]@{ ok = $true; text = "Selbstständige Portfreigaben $z." }
+        }
+
+        'fernzugriff' {
+            Set-FritzFernzugriff -An ([bool]$Daten.an) -Credential $c
+            Leere-Cache @('sicher')
+            $z = if ($Daten.an) { 'eingeschaltet' } else { 'abgeschaltet' }
+            return [pscustomobject]@{ ok = $true; text = "Fernzugriff aus dem Internet $z." }
+        }
+
+        'wlanname' {
+            Set-FritzWlanName -Index ([int]$Daten.index) -Name ([string]$Daten.wert) -Credential $c
+            Leere-Cache @('wlan','gast')
+            return [pscustomobject]@{ ok = $true
+                text = "Netzname geändert. Geräte, die das alte Netz kennen, müssen sich neu verbinden." }
+        }
+
+        'wlanschluessel' {
+            Set-FritzWlanSchluessel -Index ([int]$Daten.index) -Schluessel ([string]$Daten.wert) -Credential $c
+            Leere-Cache @('gast')
+            return [pscustomobject]@{ ok = $true
+                text = "Schlüssel geändert. Alle verbundenen Geräte müssen sich mit dem neuen Schlüssel neu anmelden." }
+        }
+
+        'wlankanal' {
+            Set-FritzWlanKanal -Index ([int]$Daten.index) -Kanal ([int]$Daten.wert) -Credential $c
+            Leere-Cache @('wlan','funk')
+            $k = [int]$Daten.wert
+            $t = if ($k -eq 0) { 'Kanalwahl der Box überlassen.' } else { "Kanal $k gesetzt." }
+            return [pscustomobject]@{ ok = $true; text = "$t Das Funknetz wird dabei kurz unterbrochen." }
+        }
+
+        'wlansichtbar' {
+            Set-FritzWlanSichtbar -Index ([int]$Daten.index) -Sichtbar ([bool]$Daten.an) -Credential $c
+            Leere-Cache @('wlan')
+            $z = if ($Daten.an) { 'wird wieder angezeigt' } else { 'ist verborgen' }
+            return [pscustomobject]@{ ok = $true
+                text = "Der Netzname $z. Verbergen erhöht die Sicherheit übrigens nicht — es macht das Netz nur unbequemer." }
+        }
+
+        'portfreigabe' {
+            Remove-FritzPortfreigabe -Protokoll ([string]$Daten.protokoll) `
+                                     -AussenPort ([int]$Daten.port) -Credential $c
+            Leere-Cache @('ports')
+            return [pscustomobject]@{ ok = $true; text = "Portfreigabe $($Daten.protokoll) $($Daten.port) entfernt." }
+        }
+
+        'neustart' {
+            Restart-FritzBox -Credential $c
+            Leere-Cache
+            return [pscustomobject]@{ ok = $true
+                text = 'Die Box startet neu. Das dauert ein bis zwei Minuten, in denen nichts erreichbar ist.' }
+        }
+
+        default { throw "Unbekannte Änderung: $Was" }
+    }
+}
+
 # ============================================================= HTTP-SERVER
 
 function Send-Antwort {
@@ -561,7 +634,10 @@ function Start-Panel {
     $script:Demo = [bool]$Demo
     $konfig = Get-Konfig
     if (-not $Port) { $Port = $konfig.PanelPort }
-    Set-FritzVerbindung -Adresse $konfig.BoxAdresse -Port $konfig.BoxPort
+    Set-FritzVerbindung -Adresse $konfig.BoxAdresse -Port $konfig.BoxPort `
+                        -Tls ([bool]$konfig.BoxTls) -TlsPort $konfig.BoxTlsPort `
+                        -Fingerabdruck $konfig.BoxFingerabdruck
+    if ($konfig.BoxTls) { Initialize-FritzTlsPruefung }
 
     if (-not $script:Demo) {
         try { $script:Cred = Get-Zugang }
@@ -730,6 +806,19 @@ function Start-Panel {
                             Invoke-FritzNeuverbinden -Credential $script:Cred
                             Leere-Cache
                             Send-Json $strom ([pscustomobject]@{ ok = $true })
+                        } catch { Send-Json $strom ([pscustomobject]@{ fehler = $_.Exception.Message }) 400 }
+                        break
+                    }
+
+                    # Alle Aenderungen an der Box laufen ueber einen Weg. Das haelt
+                    # die Berechtigungspruefung und die Fehlerbehandlung an einer Stelle.
+                    '^/api/aendern$' {
+                        try {
+                            if ($script:Demo)  { throw 'Beispielmodus — es wird nichts geändert.' }
+                            if ($script:Lokal) { throw 'Ohne Zugangsdaten kann nichts an der Box geändert werden.' }
+                            $d = $anf.Body | ConvertFrom-Json
+                            $antwort = Invoke-Aenderung -Was $d.was -Daten $d
+                            Send-Json $strom $antwort
                         } catch { Send-Json $strom ([pscustomobject]@{ fehler = $_.Exception.Message }) 400 }
                         break
                     }

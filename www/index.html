@@ -864,6 +864,18 @@ function zFunk(d){
   else{
     h+='<div class="gitter g3">';
     arr(netze).forEach(n=>{
+      // Im 5-GHz-Band sind 52 bis 144 Radarkanäle: erkennt die Box ein
+      // Radarsignal, muss sie sofort wechseln und die Verbindung reißt ab.
+      const kanal=parseInt(n.Kanal,10)||0;
+      const radar=(n.Band==='5 GHz'||n.Band==='Gastnetz')&&kanal>=52&&kanal<=144;
+      // Der eingestellte Kanal muss immer in der Liste stehen, sonst zeigt das
+      // Feld einen falschen Zustand an und ein Klick ändert ihn ungewollt.
+      const kanaele=n.Band==='2,4 GHz'?[0,1,6,11]:[0,36,40,44,48];
+      if(kanal&&kanaele.indexOf(kanal)<0) kanaele.push(kanal);
+      kanaele.sort((a,b)=>a-b);
+      const kanalWahl=kanaele.map(k=>'<option value="'+k+'"'+(k===kanal?' selected':'')+'>'+
+        (k===0?'automatisch':'Kanal '+k+(k>=52&&k<=144?' (Radar)':''))+'</option>').join('');
+
       h+=karte(n.Band,
         '<div style="display:flex;align-items:center;gap:11px;margin-bottom:12px">'+
           '<div><div style="font:700 22px/1 var(--sans)">'+zahl(n.Clients)+'</div>'+
@@ -871,9 +883,23 @@ function zFunk(d){
           '<button class="kn '+(n.An?'an':'aus')+'" style="margin-left:auto" '+
             'onclick="wlanSchalten('+n.Index+','+(!n.An)+')">'+(n.An?'an':'aus')+'</button></div>'+
         '<dl class="kv"><dt>Name</dt><dd>'+esc(n.SSID)+'</dd>'+
-          '<dt>Kanal</dt><dd>'+esc(n.Kanal||'—')+'</dd>'+
           '<dt>Standard</dt><dd>'+esc(n.Standard||'—')+'</dd>'+
-          '<dt>Sichtbar</dt><dd>'+(n.Sichtbar?'ja':'nein')+'</dd></dl>');
+          '<dt>Sichtbar</dt><dd>'+(n.Sichtbar?'ja':'nein')+'</dd></dl>'+
+        (radar?'<div class="strip s-krit" style="margin-top:11px"><div>'+
+          '<b>Kanal '+kanal+' ist ein Radarkanal</b><span>Erkennt die Box ein Wetterradar, '+
+          'muss sie sofort wechseln — die Verbindung reißt für ein bis zwei Minuten ab. '+
+          'Kanäle 36 bis 48 sind davon frei.</span></div></div>':'')+
+        '<div class="feld" style="margin-top:13px;margin-bottom:9px">'+
+          '<label for="kanal'+n.Index+'">Kanal</label>'+
+          '<select id="kanal'+n.Index+'" onchange="kanalSetzen('+n.Index+',this.value)">'+
+            kanalWahl+'</select></div>'+
+        '<div style="display:flex;gap:7px;flex-wrap:wrap">'+
+          '<button class="kn klein" onclick="netznameAendern('+n.Index+',\''+
+            esc(n.SSID).replace(/'/g,"\\'")+'\')">Name ändern</button>'+
+          (n.Index===3?'<button class="kn klein" onclick="schluesselAendern(3)">Schlüssel ändern</button>':'')+
+          '<button class="kn klein" onclick="aendern(\'wlansichtbar\',{index:'+n.Index+',an:'+
+            (!n.Sichtbar)+'},null,null)">'+(n.Sichtbar?'verbergen':'anzeigen')+'</button>'+
+        '</div>');
     });
     h+='</div>';
   }
@@ -1029,10 +1055,18 @@ function zSicherheit(d){
   if(!istFehler(lage)&&lage){
     if(lage.Upnp) punkte.push({t:'Selbstständige Portfreigaben (UPnP)',an:lage.Upnp.An,schlecht:lage.Upnp.An,
       gut:'aus — keine Anwendung öffnet eigenmächtig Ports',
-      schlimm:'an — jede Anwendung im Haus darf sich einen Port ins Internet öffnen'});
+      schlimm:'an — jede Anwendung im Haus darf sich einen Port ins Internet öffnen',
+      schalter:{was:'upnp',an:!lage.Upnp.An,
+        text:lage.Upnp.An?'abschalten':'einschalten',
+        frage:lage.Upnp.An
+          ?'Selbstständige Portfreigaben abschalten?\n\nAnwendungen, die sich bisher selbst einen Port geöffnet haben — manche Spiele, Konsolen, Tauschprogramme — können das dann nicht mehr. Notfalls trägt man die Freigabe von Hand ein.'
+          :'Selbstständige Portfreigaben wieder einschalten?\n\nJede Anwendung im Haus darf sich damit ohne Rückfrage einen Port ins Internet öffnen.'}});
     if(lage.Fernzugriff) punkte.push({t:'Fernzugriff aus dem Internet',an:lage.Fernzugriff.An,
       schlecht:lage.Fernzugriff.An,gut:'aus — die Box ist von außen nicht erreichbar',
-      schlimm:'an — erreichbar über Port '+esc(lage.Fernzugriff.Port)});
+      schlimm:'an — erreichbar über Port '+esc(lage.Fernzugriff.Port),
+      schalter:lage.Fernzugriff.An?{was:'fernzugriff',an:false,text:'abschalten',
+        frage:'Fernzugriff abschalten?\n\nDie Box ist danach aus dem Internet nicht mehr erreichbar. Nutzt du MyFRITZ oder ein VPN über die Box von unterwegs, funktioniert das dann nicht mehr.',
+        tippen:'abschalten'}:null});
     if(lage.MyFritz) punkte.push({t:'MyFRITZ',an:lage.MyFritz.An,schlecht:false,
       gut:'aus',schlimm:'an — '+esc(lage.MyFritz.Name||'')});
   }
@@ -1043,12 +1077,20 @@ function zSicherheit(d){
   abzeichen('sicherheit',offen||'','');
 
   if(punkte.length){
-    h+=karte('Einstellungen der Box',punkte.map(p=>
-      '<div style="display:flex;gap:11px;align-items:flex-start;padding:10px 0;'+
-      'border-bottom:1px solid var(--linie)"><span class="pkt d-'+(p.schlecht?'neg':'pos')+
-      '" style="margin-top:6px"></span><div><div style="font-weight:600">'+esc(p.t)+'</div>'+
-      '<div class="zart">'+(p.an?p.schlimm:p.gut)+'</div></div></div>').join(''),
-      {voll:true,zahl:offen?offen+' offen':'unauffällig'});
+    h+=karte('Einstellungen der Box',punkte.map(p=>{
+      let kn='';
+      if(p.schalter){
+        const s=p.schalter;
+        kn='<button class="kn klein'+(p.schlecht?' stark':'')+'" style="margin-left:auto;align-self:center" '+
+           'onclick="aendern(\''+s.was+'\',{an:'+s.an+'},'+
+           JSON.stringify(s.frage)+','+(s.tippen?JSON.stringify(s.tippen):'null')+')">'+
+           esc(s.text)+'</button>';
+      }
+      return '<div style="display:flex;gap:11px;align-items:flex-start;padding:10px 0;'+
+        'border-bottom:1px solid var(--linie)"><span class="pkt d-'+(p.schlecht?'neg':'pos')+
+        '" style="margin-top:6px"></span><div><div style="font-weight:600">'+esc(p.t)+'</div>'+
+        '<div class="zart">'+(p.an?p.schlimm:p.gut)+'</div></div>'+kn+'</div>';
+    }).join(''),{voll:true,zahl:offen?offen+' offen':'unauffällig'});
   }
 
   h+='<div class="gitter g2">';
@@ -1058,11 +1100,18 @@ function zSicherheit(d){
       '<td class="m">'+esc(p.Protokoll)+' '+esc(p.AussenPort)+'</td>'+
       '<td class="m zart">'+esc(p.Ziel)+':'+esc(p.ZielPort)+'</td>'+
       '<td>'+(p.Aktiv?'<span class="pille p-krit">offen</span>':
-        '<span class="pille p-neutral">aus</span>')+'</td></tr>').join('')||
-      '<tr><td colspan="4" class="leer">keine Portfreigaben — gut so</td></tr>';
+        '<span class="pille p-neutral">aus</span>')+'</td>'+
+      '<td class="r"><button class="kn klein" onclick="freigabeLoeschen(\''+
+        esc(p.Protokoll)+'\','+parseInt(p.AussenPort,10)+',\''+
+        esc(p.Beschreibung||'').replace(/'/g,"\\'")+'\')">entfernen</button></td></tr>').join('')||
+      '<tr><td colspan="5" class="leer">keine Portfreigaben — gut so</td></tr>';
     h+=karte('Portfreigaben','<div class="rollt kurz"><table><thead><tr><th>Beschreibung</th>'+
-      '<th>von außen</th><th>nach innen</th><th>Zustand</th></tr></thead><tbody>'+zeilen+
-      '</tbody></table></div>',{roh:true,zahl:String(arr(fg).length)});
+      '<th>von außen</th><th>nach innen</th><th>Zustand</th><th></th></tr></thead><tbody>'+zeilen+
+      '</tbody></table></div>'+
+      '<div class="hilfe" style="padding:11px 15px 13px">Jede Freigabe ist eine Tür von außen in dein '+
+      'Netz. Einträge, die mit „UPnP:" beginnen, hat sich eine Anwendung selbst geöffnet — die '+
+      'verschwinden dauerhaft nur, wenn du oben die selbstständigen Portfreigaben abschaltest.</div>',
+      {roh:true,zahl:String(arr(fg).length)});
   }
   if(lok&&!istFehler(lok)){
     const fwZ=arr(lok.Firewall).map(f=>'<dt>Firewall '+esc(f.Profil)+'</dt><dd>'+
@@ -1422,13 +1471,32 @@ function zEinstellungen(d){
     f('NeusyncGrenze','Neusynchronisierungen melden ab',k.NeusyncGrenze,'','number'));
   h+='</div>';
 
-  h+=karte('Speicherort',
+  // --- Verschlüsselung
+  const tls=k.BoxTls;
+  h+=karte('Verbindung zur Box',
+    '<div class="strip '+(tls?'s-pos':'s-krit')+'"><div>'+
+      '<b>'+(tls?'Verschlüsselt':'Unverschlüsselt')+'</b><span>'+
+      (tls
+        ?'Anmeldung und übertragene Werte laufen über TLS auf Port '+esc(k.BoxTlsPort)+'. '+
+         'Das Zertifikat der Box ist selbst ausgestellt; das Panel merkt sich seinen Fingerabdruck '+
+         'und lehnt die Verbindung ab, wenn er sich ändert — so wie SSH es macht.'
+        :'Anmeldung und Werte gehen im Klartext durch dein Netz. Ein WLAN-Schlüssel lässt sich '+
+         'so nicht setzen. Bei der Einrichtung wurde keine TLS-Verbindung gefunden.')+
+      '</span></div></div>'+
+    (k.BoxFingerabdruck?'<dl class="kv" style="margin-top:12px"><dt>Fingerabdruck</dt><dd>'+
+      esc(String(k.BoxFingerabdruck).replace(/(..)(?=.)/g,'$1:'))+'</dd></dl>':''),
+    {voll:true});
+
+  h+=karte('Speicherort und Wartung',
     '<dl class="kv"><dt>Einstellungen</dt><dd>'+esc(d.KonfigPfad||'')+'</dd></dl>'+
     '<div class="hilfe" style="margin-top:9px">Einstellungen und Zugangsdaten liegen außerhalb des '+
     'Programmordners. Ein Update überschreibt sie nicht, und sie geraten nie in ein Git-Repository.</div>'+
-    '<div style="margin-top:14px;display:flex;gap:9px">'+
+    '<div style="margin-top:16px;display:flex;gap:9px;flex-wrap:wrap">'+
     '<button class="kn stark" onclick="einstellungenSpeichern()">Speichern</button>'+
-    '<button class="kn" onclick="laden()">Verwerfen</button></div>',{voll:true});
+    '<button class="kn" onclick="laden()">Verwerfen</button>'+
+    (d.Demo||d.Lokal?'':'<button class="kn aus" style="margin-left:auto" onclick="boxNeustart()">'+
+      'FRITZ!Box neu starten</button>')+
+    '</div>',{voll:true});
   return h;
 }
 async function einstellungenSpeichern(){
@@ -1444,6 +1512,57 @@ async function einstellungenSpeichern(){
     if(d.fehler) throw new Error(d.fehler);
     frisch();
   }catch(e){ alert('Speichern fehlgeschlagen: '+e.message); }
+}
+
+/* ========================================================= ÄNDERUNGEN */
+/* Ein Weg für alle Änderungen an der Box. Riskante verlangen, dass ein Wort
+   getippt wird — ein Klick allein soll das Funknetz nicht abschalten können. */
+async function aendern(was,daten,frage,tippen){
+  if(tippen){
+    const ein=prompt(frage+'\n\nZum Bestätigen »'+tippen+'« eingeben:');
+    if(ein===null) return false;
+    if(ein.trim().toLowerCase()!==tippen.toLowerCase()){
+      alert('Nicht bestätigt — es wurde nichts geändert.');
+      return false;
+    }
+  } else if(frage && !confirm(frage)) return false;
+
+  try{
+    const r=await fetch('/api/aendern',{method:'POST',
+      body:JSON.stringify(Object.assign({was:was},daten||{}))});
+    const d=await r.json();
+    if(d.fehler){ alert('Fehlgeschlagen:\n\n'+d.fehler); return false; }
+    if(d.text) melden(d.text);
+    setTimeout(frisch,1200);
+    return true;
+  }catch(e){ alert('Fehlgeschlagen: '+e.message); return false; }
+}
+
+/* Kurze Rückmeldung am oberen Rand statt eines Meldungsfensters. */
+function melden(text){
+  let el=document.getElementById('meldung');
+  if(!el){
+    el=document.createElement('div');
+    el.id='meldung';
+    el.style.cssText='position:fixed;top:54px;right:22px;z-index:99;max-width:380px;'+
+      'background:var(--pos-w);border-left:4px solid var(--pos);color:var(--tx);'+
+      'padding:12px 15px;border-radius:var(--r);box-shadow:var(--schatten);font-size:13px;'+
+      'line-height:1.5;transition:opacity .3s';
+    document.body.appendChild(el);
+  }
+  el.textContent=text;
+  el.style.opacity='1';
+  clearTimeout(el._t);
+  el._t=setTimeout(()=>{ el.style.opacity='0'; },6000);
+}
+
+/* Wert bearbeiten: zeigt ein Eingabefeld mit dem jetzigen Wert. */
+async function bearbeiten(was,index,jetzt,titel,hinweis,tippen){
+  const neu=prompt(titel+(hinweis?'\n\n'+hinweis:''),jetzt||'');
+  if(neu===null) return;
+  if(neu===jetzt){ melden('Unverändert.'); return; }
+  await aendern(was,{index:index,wert:neu},
+    tippen?'»'+esc(neu)+'« übernehmen?':null,tippen);
 }
 
 /* ============================================================ AKTIONEN */
@@ -1462,10 +1581,35 @@ async function sperren(mac,an){
 async function wecken(mac){
   if(await senden('/api/wecken',{mac:mac})) alert('Weckruf gesendet an '+mac);
 }
+const BANDNAME={1:'2,4 GHz',2:'5 GHz',3:'Gastnetz'};
+
 async function wlanSchalten(index,an){
-  const n={1:'2,4 GHz',2:'5 GHz',3:'Gastnetz'};
-  if(!an&&!confirm('Funknetz '+n[index]+' wirklich abschalten?')) return;
+  if(!an){
+    // Wer das 5-GHz-Netz abschaltet, während er selbst darüber verbunden ist,
+    // verliert den Zugang zum Panel. Deshalb tippen statt klicken.
+    await aendern('wlan',{index:index,an:an},
+      'Funknetz '+BANDNAME[index]+' abschalten?\n\nBist du selbst darüber verbunden, '+
+      'verlierst du die Verbindung zu diesem Panel.','abschalten');
+    return;
+  }
   if(await senden('/api/wlan',{index:index,an:an})) setTimeout(frisch,900);
+}
+async function netznameAendern(index,jetzt){
+  await bearbeiten('wlanname',index,jetzt,'Neuer Name für das '+BANDNAME[index]+'-Netz',
+    'Bis zu 32 Zeichen. Alle Geräte müssen sich danach neu verbinden.');
+}
+async function schluesselAendern(index){
+  const neu=prompt('Neuer Schlüssel für das '+BANDNAME[index]+'-Netz\n\n'+
+    'Zwischen 8 und 63 Zeichen. Alle verbundenen Geräte müssen sich neu anmelden.\n'+
+    'Wird nur über eine verschlüsselte Verbindung zur Box übertragen.');
+  if(neu===null) return;
+  if(neu.length<8){ alert('Zu kurz — mindestens 8 Zeichen.'); return; }
+  await aendern('wlanschluessel',{index:index,wert:neu},
+    'Schlüssel wirklich ändern?','ändern');
+}
+async function kanalSetzen(index,wert){
+  await aendern('wlankanal',{index:index,wert:parseInt(wert,10)},
+    null,null);
 }
 async function steckdose(ain,an){
   if(await senden('/api/steckdose',{ain:ain,an:an})) setTimeout(frisch,900);
@@ -1473,6 +1617,17 @@ async function steckdose(ain,an){
 async function neuverbinden(){
   if(!confirm('Internetverbindung trennen und neu aufbauen? Das unterbricht alles für einige Sekunden.')) return;
   if(await senden('/api/neuverbinden',{})) setTimeout(frisch,4000);
+}
+async function freigabeLoeschen(protokoll,port,beschreibung){
+  await aendern('portfreigabe',{protokoll:protokoll,port:port},
+    'Portfreigabe entfernen?\n\n'+(beschreibung?beschreibung+'\n':'')+
+    protokoll+' '+port+' von außen\n\nDer Dienst dahinter ist danach aus dem Internet '+
+    'nicht mehr erreichbar.','entfernen');
+}
+async function boxNeustart(){
+  await aendern('neustart',{},
+    'FRITZ!Box neu starten?\n\nEin bis zwei Minuten ohne Internet und ohne WLAN — für alle im Haus.',
+    'neustart');
 }
 function kopieren(id){
   const t=document.getElementById(id);

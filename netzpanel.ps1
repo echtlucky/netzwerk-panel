@@ -67,6 +67,10 @@ function Invoke-Einrichten {
     Write-Host "  Benötigte Berechtigung: 'FRITZ!Box Einstellungen'"
     Write-Host ""
 
+    Write-Host "  Beim Benutzernamen: Hast du nur das Kennwort vom Geräteaufkleber," -ForegroundColor DarkGray
+    Write-Host "  lass den Namen leer und drücke Enter." -ForegroundColor DarkGray
+    Write-Host ""
+
     $adresse = Read-Host "  Adresse der FRITZ!Box [$($konfig.BoxAdresse)]"
     if (-not $adresse) { $adresse = $konfig.BoxAdresse }
 
@@ -83,7 +87,25 @@ function Invoke-Einrichten {
     $pw = Read-Host -AsSecureString
     $cred = New-Object System.Management.Automation.PSCredential($benutzer, $pw)
 
-    Set-FritzVerbindung -Adresse $adresse -Port $konfig.BoxPort
+    # Verschluesselte Verbindung bevorzugen und den Fingerabdruck merken
+    $finger = ''
+    $tls = $false
+    Write-Host ""
+    Write-Host "  Prüfe verschlüsselte Verbindung ..." -ForegroundColor DarkGray
+    try {
+        $finger = Get-FritzZertifikatFingerabdruck -Adresse $adresse -Port $konfig.BoxTlsPort
+        $tls = $true
+        Write-Host "    verschlüsselt über Port $($konfig.BoxTlsPort)" -ForegroundColor Green
+        Write-Host "    Fingerabdruck: $($finger -replace '(..)(?=.)', '$1:')" -ForegroundColor DarkGray
+    }
+    catch {
+        Write-Host "    nicht möglich, es wird unverschlüsselt gearbeitet" -ForegroundColor DarkYellow
+        Write-Host "    ($($_.Exception.Message))" -ForegroundColor DarkGray
+    }
+
+    Set-FritzVerbindung -Adresse $adresse -Port $konfig.BoxPort -Tls $tls `
+                        -TlsPort $konfig.BoxTlsPort -Fingerabdruck $finger
+    if ($tls) { Initialize-FritzTlsPruefung }
 
     Write-Host ""
     Write-Host "  Verbindung wird geprüft ..." -ForegroundColor DarkGray
@@ -99,9 +121,13 @@ function Invoke-Einrichten {
         Write-Host "    Laufzeit   : $([math]::Round($info.LaufzeitSek / 86400, 1)) Tage"
         Write-Host "    Anschluss  : $($wan.Zugangsart), $($wan.DownMbit) / $($wan.UpMbit) Mbit/s"
         Write-Host "    Geräte     : $anz bekannt"
+        if ($tls) { Write-Host "    Verbindung : verschlüsselt" -ForegroundColor Green }
+        else      { Write-Host "    Verbindung : unverschlüsselt" -ForegroundColor DarkYellow }
 
         Save-Zugang -Zugang $cred
-        $konfig.BoxAdresse = $adresse
+        $konfig.BoxAdresse       = $adresse
+        $konfig.BoxTls           = $tls
+        $konfig.BoxFingerabdruck = $finger
         Save-Konfig -Konfig $konfig | Out-Null
 
         Write-Host ""
